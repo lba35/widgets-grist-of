@@ -439,21 +439,44 @@ var OF = (function () {
     return INSTANCE_PAR_DEFAUT;
   }
 
+  /* Le script de l'API dialogue avec la page parente par messages : il n'est
+     pas lié à une instance, et celui de docs.getgrist.com fonctionne aussi
+     bien sur une instance auto-hébergée. On essaie donc l'instance d'abord,
+     puis ce repli — certaines installations ne servent pas ce fichier. */
+  function urlsApi() {
+    var essais = [origineGrist() + '/grist-plugin-api.js'];
+    [INSTANCE_PAR_DEFAUT, 'https://docs.getgrist.com'].forEach(function (o) {
+      var u = o + '/grist-plugin-api.js';
+      if (essais.indexOf(u) < 0) essais.push(u);
+    });
+    return essais;
+  }
+  var essayees = [];
+
   function chargerApi() {
     if (typeof grist !== 'undefined') return Promise.resolve();
-    var url = origineGrist() + '/grist-plugin-api.js';
+    var urls = urlsApi();
+    essayees = [];
+    var suivant = function (i) {
+      if (i >= urls.length) {
+        return Promise.reject(new Error("L'API Grist n'a pu être chargée depuis aucune de ces "
+          + 'adresses : ' + essayees.join(', ') + '.'));
+      }
+      return charger1(urls[i]).catch(function () { return suivant(i + 1); });
+    };
+    return suivant(0);
+  }
+
+  function charger1(url) {
+    essayees.push(url);
     return new Promise(function (ok, ko) {
       var s = document.createElement('script');
       s.src = url;
       s.onload = function () {
         if (typeof grist !== 'undefined') ok();
-        else ko(new Error('Le script ' + url + ' s\'est chargé, mais il ne fournit pas l\'objet '
-          + 'grist attendu.'));
+        else ko(new Error('chargé sans fournir l\'objet grist'));
       };
-      s.onerror = function () {
-        ko(new Error('Impossible de charger ' + url + '. Soit cette page n\'est pas ouverte '
-          + 'comme widget dans Grist, soit l\'adresse de l\'instance n\'est pas celle-là.'));
-      };
+      s.onerror = function () { ko(new Error('introuvable')); };
       document.head.appendChild(s);
     });
   }
@@ -465,6 +488,7 @@ var OF = (function () {
         + 'ouverte directement dans le navigateur'],
       ['Instance détectée', origineGrist()],
       ['API Grist', typeof grist !== 'undefined' ? 'chargée' : 'absente'],
+      ['Adresses essayées', essayees.length ? essayees.join('  ·  ') : 'aucune'],
       ['Adresse de cette page', location.href]
     ];
     var cible = $('page') || $('fiche') || document.body;
