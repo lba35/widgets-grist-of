@@ -18,6 +18,25 @@
   --alerte-pale: #fdecec;
   --ombre-focus: 0 0 0 3px rgba(15, 109, 92, .18);
   --rail: 272px;
+
+  /* Graphiques. Les cinq teintes de série sont attribuées dans cet ordre et
+     jamais recyclées : un domaine garde sa couleur quand on filtre. Elles ont
+     été vérifiées deux à deux pour les trois daltonismes et pour la vision
+     normale, sur le fond de page clair puis sur le fond sombre. */
+  --serie-1: #2a78d6;
+  --serie-2: #eb6834;
+  --serie-3: #1baf7a;
+  --serie-4: #eda100;
+  --serie-5: #e87ba4;
+  /* une seule teinte, du clair au foncé, pour les intensités */
+  --degrade-1: #6da7ec;
+  --degrade-2: #3987e5;
+  --degrade-3: #256abf;
+  --degrade-4: #104281;
+  /* le signe d'un résultat n'est pas une série : c'est une polarité */
+  --pos: #0f6d5c;
+  --neg: #b3261e;
+  --grille: #e7eae4;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -34,6 +53,21 @@
     --afaire-pale: #2e2619;
     --alerte-pale: #3a1f1d;
     --ombre-focus: 0 0 0 3px rgba(79, 183, 161, .22);
+
+    /* Le mode sombre n'est pas l'inverse du mode clair : chaque teinte est
+       reprise un cran plus loin dans sa rampe, puis vérifiée sur ce fond. */
+    --serie-1: #3987e5;
+    --serie-2: #d95926;
+    --serie-3: #199e70;
+    --serie-4: #c98500;
+    --serie-5: #d55181;
+    --degrade-1: #cde2fb;
+    --degrade-2: #9ec5f4;
+    --degrade-3: #5598e7;
+    --degrade-4: #2a78d6;
+    --pos: #4fb7a1;
+    --neg: #e98b84;
+    --grille: #28332e;
   }
 }
 
@@ -245,6 +279,52 @@ kbd { padding: 1px 5px; font: inherit; font-size: 11.5px;
 .coef { width: 62px; padding: 5px 7px; text-align: right; font-variant-numeric: tabular-nums;
   background: var(--surface); border: 1px solid var(--trait); border-radius: 3px; }
 .coef:focus { outline: none; border-color: var(--fait); box-shadow: var(--ombre-focus); }
+
+/* --------------------------------------------------------- graphiques -- */
+/* Les séparateurs sont portés par les tuiles elles-mêmes, et non par un fond
+   qui transparaît : une rangée incomplète laisserait sinon un bloc gris. */
+.tuiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  background: var(--surface); border: 1px solid var(--trait); margin: 0 0 28px;
+  overflow: hidden; }
+.tuile { padding: 13px 15px 14px;
+  box-shadow: 1px 0 0 var(--trait), 0 1px 0 var(--trait); }
+.tuile-lib { font-size: 12px; color: var(--sourd); }
+.tuile-val { margin: 3px 0 2px; font-size: 24px; font-weight: 600; line-height: 1.1;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.tuile-ctx { font-size: 12px; color: var(--sourd); font-variant-numeric: tabular-nums; }
+
+.figure { margin: 0 0 30px; max-width: 760px; }
+.figure-titre { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
+.figure-sous { display: block; margin-top: 2px; font-size: 12px; font-weight: 400;
+  color: var(--sourd); }
+.figure-zone { margin-top: 8px; }
+.figure-zone svg { display: block; max-width: 100%; overflow: visible; }
+
+.legende { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px;
+  font-size: 12px; color: var(--sourd); }
+.legende span { display: inline-flex; align-items: center; gap: 6px; }
+.legende b { color: var(--encre); font-weight: 600; font-variant-numeric: tabular-nums; }
+.legende .puce { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+
+/* un tableau large ne pousse pas la page : il défile dans sa bande */
+.defilant { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+
+.chiffres { margin-top: 12px; font-size: 12.5px; }
+.chiffres > summary { color: var(--sourd); cursor: pointer; width: fit-content;
+  padding: 2px 0; }
+.chiffres > summary:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
+.chiffres[open] > summary { margin-bottom: 6px; }
+
+.infobulle {
+  position: fixed; z-index: 40; max-width: 260px; padding: 7px 10px; font-size: 12.5px;
+  line-height: 1.45; background: var(--surface); color: var(--encre);
+  border: 1px solid var(--trait-fort); border-radius: 4px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .10);
+  opacity: 0; transition: opacity .12s ease; pointer-events: none;
+}
+.infobulle.visible { opacity: 1; }
+.infobulle b { font-variant-numeric: tabular-nums; }
+.infobulle .second { display: block; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 @media (max-width: 760px) {

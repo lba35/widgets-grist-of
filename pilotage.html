@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=3">
+<link rel="stylesheet" href="commun.css?v=4">
 <style>
   .onglets { display: flex; gap: 2px; flex: 0 0 auto; }
   .onglet { padding: 7px 14px; background: none; border: 1px solid transparent;
@@ -36,6 +36,9 @@
   .jauge span.grave { background: var(--alerte); }
   .a-faire { margin: 0; padding-left: 18px; }
   .a-faire li { margin-bottom: 7px; }
+  .objectifs th.gauche { padding-left: 0; }
+  .objectifs td .champ { width: 96px; }
+  .objectifs .an { font-size: 15px; }
 </style>
 </head>
 <body>
@@ -55,24 +58,42 @@
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
 <script src="commun.js?v=3"></script>
+<script src="graphes.js?v=1"></script>
 <script>
 /* =========================================================================
-   Pilotage — les deux tableaux de bord, rendus nativement.
+   Pilotage — les deux tableaux de bord.
 
    Onglet Recrutement : combien d'intervenants recruter, de quel profil,
    dans quel ordre, et ce qui empêche encore de décider.
-   Onglet Projection : la trajectoire pluriannuelle, par année et par
-   domaine, lue dans les colonnes de la table Annees.
+   Onglet Projection : la trajectoire pluriannuelle — recettes face aux
+   objectifs, résultat, composition par domaine, remplissage — en
+   graphiques, en chiffres, et les objectifs à fixer année par année.
 
    Aucun calcul n'est refait ici : tout vient des colonnes formules du
-   document, pour que l'écran et le document ne puissent pas diverger.
+   document, pour que l'écran et le document ne puissent pas diverger. Les
+   objectifs sont la seule chose que cet écran écrit, parce qu'ils ne se
+   déduisent de rien : ce sont des décisions.
    ========================================================================= */
 'use strict';
 
 var TABLES = ['Annees', 'Formations', 'Intervenants', 'Intervenants_formation', 'Vivier',
   'Projections', 'Ventes_inter', 'Ventes_intra', 'Parametres', 'Gestionnaire', 'Domaines', 'Charge'];
 
-var ongletCourant = 'recrutement', idAnnee = null;
+/* Les objectifs que l'écran sait tenir. Chacun n'apparaît que si la colonne
+   de réalisé existe dans la table Annees ; la colonne d'objectif, elle, peut
+   être créée depuis l'écran. */
+var OBJECTIFS = [
+  { col: 'objectif_ca', libelle: 'Recettes', titre: 'Objectif de recettes',
+    reel: 'recettes', format: OF.eur },
+  { col: 'objectif_resultat', libelle: 'Résultat', titre: 'Objectif de résultat',
+    reel: 'resultat', format: OF.eur, signe: true },
+  { col: 'objectif_sessions', libelle: 'Sessions', titre: 'Objectif de sessions',
+    reel: 'sessions_total', format: OF.ent },
+  { col: 'objectif_heures_stagiaires', libelle: 'Heures stagiaires',
+    titre: 'Objectif d\'heures stagiaires', reel: 'heures_stagiaires', format: OF.ent }
+];
+
+var ongletCourant = 'recrutement', idAnnee = null, focusARendre = null;
 
 function nom(t, id, defaut) {
   var l = OF.parId(OF.table(t))[id];
@@ -91,6 +112,30 @@ function couple(v) {
 }
 function somme(L, c) { return L.reduce(function (n, v) { return n + (v[c] || 0); }, 0); }
 
+/* Une colonne existe-t-elle ? D'abord les métadonnées, sinon les données. */
+function colonneExiste(t, c) {
+  var meta = OF.doc.colonnes[t];
+  if (meta && Object.keys(meta).length) return !!meta[c];
+  return OF.table(t).some(function (l) { return c in l; });
+}
+function objectifsPossibles() {
+  return OBJECTIFS.filter(function (o) { return colonneExiste('Annees', o.reel); });
+}
+function objectifsTenus() {
+  return objectifsPossibles().filter(function (o) { return colonneExiste('Annees', o.col); });
+}
+
+/* L'horizon affiché : toutes les années déclarées, fenêtrées à huit pour que
+   les graphiques restent lisibles. */
+function anneesAffichees() {
+  var toutes = OF.anneesTriees();
+  if (toutes.length <= 8) return toutes;
+  var i = 0;
+  toutes.forEach(function (a, k) { if (a.id === idAnnee) i = k; });
+  var debut = Math.min(Math.max(0, i - 1), toutes.length - 8);
+  return toutes.slice(debut, debut + 8);
+}
+
 /* ------------------------------------------------------- indicateurs --- */
 function indicateur(feu, libelle, valeur, cible) {
   var d = document.createElement('div');
@@ -100,6 +145,19 @@ function indicateur(feu, libelle, valeur, cible) {
     + '<span class="ind-val">' + OF.echappe(valeur) + '</span>'
     + '<span class="ind-cible">' + OF.echappe(cible || '') + '</span>';
   return d;
+}
+function tuile(libelle, valeur, contexte, classe) {
+  var d = document.createElement('div');
+  d.className = 'tuile';
+  d.innerHTML = '<div class="tuile-lib">' + OF.echappe(libelle) + '</div>'
+    + '<div class="tuile-val' + (classe ? ' ' + classe : '') + '">' + OF.echappe(valeur) + '</div>'
+    + '<div class="tuile-ctx">' + (contexte || '') + '</div>';
+  return d;
+}
+function titre(t) {
+  var h = document.createElement('h2');
+  h.textContent = t;
+  return h;
 }
 
 /* ------------------------------------------------------- recrutement --- */
@@ -251,38 +309,8 @@ function pageRecrutement() {
     zone.appendChild(ul);
   }
 
-  /* la trajectoire, s'il y a plusieurs années */
-  var annees = OF.anneesTriees();
-  if (annees.length > 1) {
-    var trajet = [];
-    annees.forEach(function (a) {
-      var r = somme(vivierDe(a.id), 'a_recruter');
-      if (r) trajet.push({ annee: a.annee, recruter: r });
-    });
-    if (trajet.length) {
-      zone.appendChild(titre('Quand recruter'));
-      var ul2 = document.createElement('ul');
-      ul2.className = 'rangs';
-      trajet.forEach(function (t) {
-        var parProfil = {};
-        vivierDe(OF.anneesTriees().filter(function (a) { return a.annee === t.annee; })[0].id)
-          .forEach(function (v) {
-            if (v.a_recruter) {
-              parProfil[v.ressource || 0] = (parProfil[v.ressource || 0] || 0) + v.a_recruter;
-            }
-          });
-        var detail = Object.keys(parProfil).map(function (k) {
-          return nom('Intervenants', +k, 'profil non renseigné') + ' ' + OF.ent(parProfil[k]);
-        }).join(', ');
-        var li = document.createElement('li');
-        li.innerHTML = '<span class="rang">' + t.annee + '</span>'
-          + '<span class="rang-detail">' + OF.echappe(detail) + '</span>'
-          + '<span class="rang-val">' + OF.ent(t.recruter) + '</span>';
-        ul2.appendChild(li);
-      });
-      zone.appendChild(ul2);
-    }
-  }
+  /* la trajectoire du recrutement, par année et par profil */
+  trajectoireRecrutement(zone);
 
   /* ce qui bloque */
   var aFaire = [];
@@ -332,10 +360,75 @@ function pageRecrutement() {
   return zone;
 }
 
+/* Quand recruter, et de quel profil : une barre empilée par année. */
+function trajectoireRecrutement(zone) {
+  var annees = anneesAffichees();
+  if (annees.length < 2) return;
+
+  var parProfil = {};
+  annees.forEach(function (a) {
+    vivierDe(a.id).forEach(function (v) {
+      if (!v.a_recruter) return;
+      var k = v.ressource || 0;
+      (parProfil[k] = parProfil[k] || {})[a.id] = (parProfil[k][a.id] || 0) + v.a_recruter;
+    });
+  });
+  var profils = Object.keys(parProfil);
+  if (!profils.length) return;
+
+  profils.sort(function (x, y) {
+    var sx = 0, sy = 0;
+    annees.forEach(function (a) { sx += parProfil[x][a.id] || 0; sy += parProfil[y][a.id] || 0; });
+    return sy - sx;
+  });
+
+  var noms = profils.map(function (k) { return nom('Intervenants', +k, 'Profil non renseigné'); });
+  var series = profils.map(function (k, s) {
+    return { nom: noms[s],
+      valeur: OF.ent(annees.reduce(function (n, a) { return n + (parProfil[k][a.id] || 0); }, 0))
+        + ' au total' };
+  });
+  var groupes = annees.map(function (a) {
+    var parts = profils.map(function (k) { return parProfil[k][a.id] || 0; });
+    var total = parts.reduce(function (n, v) { return n + v; }, 0);
+    return {
+      libelle: String(a.annee), parts: parts,
+      bulle: '<b>' + a.annee + '</b> — ' + OF.plur(total, 'intervenant') + ' à recruter'
+        + noms.map(function (n, s) {
+          return parts[s] ? '<span class="second">' + OF.echappe(n)
+            + ' : ' + OF.ent(parts[s]) + '</span>' : '';
+        }).join('')
+    };
+  });
+
+  zone.appendChild(titre('Quand recruter, et de quel profil'));
+  G.figure(zone, {
+    titre: 'Intervenants à recruter par année',
+    sous: 'Un même profil polyvalent peut couvrir plusieurs besoins : ces totaux sont des majorants.',
+    haut: 200,
+    series: series,
+    chiffres: G.chiffres('Les chiffres',
+      ['Profil'].concat(annees.map(function (a) { return String(a.annee); })),
+      profils.map(function (k, s) {
+        return [series[s].nom].concat(annees.map(function (a) {
+          return parProfil[k][a.id] ? OF.ent(parProfil[k][a.id]) : '—';
+        }));
+      })),
+    dessin: function (larg, haut) {
+      return G.empilees({
+        larg: larg, haut: haut, groupes: groupes, series: series,
+        formatY: OF.ent, formatVal: OF.ent, total: true,
+        unite: 'intervenants',
+        description: 'Intervenants à recruter par année, répartis par profil.'
+      });
+    }
+  });
+}
+
 /* -------------------------------------------------------- projection --- */
 function pageProjection() {
   var zone = document.createElement('div');
-  var annees = OF.anneesTriees().filter(function (a) { return a.sessions_total || a.recettes; });
+  var annees = anneesAffichees();
 
   var h1 = document.createElement('h1');
   h1.textContent = 'Projection pluriannuelle';
@@ -344,12 +437,264 @@ function pageProjection() {
   if (!annees.length) {
     var v = document.createElement('p');
     v.className = 'alerte-bloc';
-    v.textContent = 'Aucune session projetée pour l\'instant. La fiche formation permet de saisir '
-      + 'les sessions et les places, formation par formation.';
+    v.textContent = 'Aucune année dans la table Annees : il n\'y a pas encore d\'horizon à projeter.';
     zone.appendChild(v);
     return zone;
   }
+  if (!annees.some(function (a) { return a.sessions_total || a.recettes; })) {
+    var w = document.createElement('p');
+    w.className = 'alerte-bloc';
+    w.textContent = 'Aucune session projetée pour l\'instant. La fiche formation permet de saisir '
+      + 'les sessions et les places, formation par formation. Les objectifs, en bas de cet écran, '
+      + 'peuvent être posés dès maintenant : c\'est à eux que la projection se comparera.';
+    zone.appendChild(w);
+  }
 
+  bandeauAnnee(zone);
+  grapheRecettes(zone, annees);
+  grapheResultat(zone, annees);
+  grapheDomaines(zone, annees);
+  grapheRemplissage(zone, annees);
+  tableauAnnees(zone, annees);
+  editeurObjectifs(zone, annees);
+
+  var note = document.createElement('p');
+  note.className = 'aide';
+  note.textContent = 'Tous ces chiffres sont lus dans les colonnes calculées du document : '
+    + 'ils ne sont pas recalculés ici, et ne peuvent donc pas en diverger. Le résultat est un '
+    + 'résultat sur coûts directs — les charges indirectes de structure restent au budget global. '
+    + 'Seuls les objectifs sont saisis : ils ne se déduisent de rien.';
+  zone.appendChild(note);
+  return zone;
+}
+
+/* L'année pilotée en quatre ou cinq chiffres, avant tout graphique. */
+function bandeauAnnee(zone) {
+  var a = OF.parId(OF.table('Annees'))[idAnnee];
+  if (!a) return;
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+
+  var ecart = a.objectif_ca ? (a.recettes || 0) - a.objectif_ca : null;
+  t.appendChild(tuile('Recettes ' + a.annee, OF.eur(a.recettes || 0),
+    ecart === null
+      ? '<span>objectif non fixé</span>'
+      : '<span class="' + (ecart >= 0 ? 'positif' : 'negatif') + '">'
+        + (ecart >= 0 ? '+' : '') + OF.eur(ecart) + '</span> sur ' + OF.eur(a.objectif_ca)));
+
+  t.appendChild(tuile('Résultat', OF.eur(a.resultat || 0),
+    a.recettes ? Math.round(100 * (a.resultat || 0) / a.recettes) + ' % de marge'
+      : 'pas de recettes projetées',
+    (a.resultat || 0) < 0 ? 'negatif' : 'positif'));
+
+  t.appendChild(tuile('Sessions', OF.ent(a.sessions_total || 0),
+    OF.ent(a.sessions_inter || 0) + ' inter · ' + OF.ent(a.sessions_intra || 0) + ' intra'));
+
+  t.appendChild(tuile('Remplissage inter',
+    a.remplissage_inter ? Math.round(100 * a.remplissage_inter) + ' %' : '—',
+    OF.plur(a.places || 0, 'place') + ' ' + OF.accord(a.places || 0, 'projetée', 'projetées')));
+
+  var recruter = somme(vivierDe(idAnnee), 'a_recruter');
+  t.appendChild(tuile('À recruter', OF.ent(recruter),
+    recruter ? OF.plur(somme(vivierDe(idAnnee), 'candidats_a_rechercher'), 'candidat')
+      + ' à rechercher' : 'le vivier déclaré suffit',
+    recruter ? 'negatif' : ''));
+
+  zone.appendChild(t);
+}
+
+function grapheRecettes(zone, annees) {
+  var avecObjectif = annees.some(function (a) { return a.objectif_ca; });
+  var valeurs = annees.map(function (a) {
+    var ecart = a.objectif_ca ? (a.recettes || 0) - a.objectif_ca : null;
+    return {
+      libelle: String(a.annee),
+      valeur: (a.recettes || a.recettes === 0) ? a.recettes : null,
+      objectif: a.objectif_ca || null,
+      bulle: '<b>' + a.annee + '</b> — recettes ' + OF.eur(a.recettes || 0)
+        + (a.objectif_ca
+          ? '<span class="second">objectif ' + OF.eur(a.objectif_ca) + '</span>'
+            + '<span class="second ' + (ecart >= 0 ? 'positif' : 'negatif') + '">'
+            + (ecart >= 0 ? '+' : '') + OF.eur(ecart) + '</span>'
+          : '<span class="second">objectif non fixé</span>')
+        + '<span class="second">coûts ' + OF.eur(a.couts || 0) + '</span>'
+    };
+  });
+
+  G.figure(zone, {
+    titre: 'Recettes projetées par année',
+    sous: avecObjectif
+      ? 'Le trait pointillé marque l\'objectif de recettes de l\'année.'
+      : 'Aucun objectif n\'est encore fixé — ils se saisissent en bas de cet écran.',
+    haut: 215,
+    chiffres: G.chiffres('Les chiffres',
+      ['', 'Recettes', 'Objectif', 'Écart'].slice(0, avecObjectif ? 4 : 2),
+      annees.map(function (a) {
+        var L = [String(a.annee), (a.recettes || a.recettes === 0) ? OF.eur(a.recettes) : '—'];
+        if (avecObjectif) {
+          L.push(a.objectif_ca ? OF.eur(a.objectif_ca) : '—');
+          var e = a.objectif_ca ? (a.recettes || 0) - a.objectif_ca : null;
+          L.push(e === null ? '—' : (e >= 0 ? '+' : '') + OF.eur(e));
+        }
+        return L;
+      })),
+    dessin: function (larg, haut) {
+      return G.barres({
+        larg: larg, haut: haut, valeurs: valeurs, unite: 'en €',
+        description: 'Recettes projetées par année, comparées à l\'objectif de chaque année.'
+      });
+    }
+  });
+}
+
+function grapheResultat(zone, annees) {
+  var valeurs = annees.map(function (a) {
+    return {
+      libelle: String(a.annee),
+      valeur: (a.resultat || a.resultat === 0) ? a.resultat : null,
+      bulle: '<b>' + a.annee + '</b> — résultat ' + OF.eur(a.resultat || 0)
+        + '<span class="second">recettes ' + OF.eur(a.recettes || 0)
+        + ' − coûts ' + OF.eur(a.couts || 0) + '</span>'
+        + (a.recettes ? '<span class="second">taux de marge '
+          + Math.round(100 * (a.resultat || 0) / a.recettes) + ' %</span>' : '')
+    };
+  });
+  if (!valeurs.some(function (v) { return v.valeur !== null; })) return;
+
+  G.figure(zone, {
+    titre: 'Résultat sur coûts directs, par année',
+    sous: 'Recettes moins coûts directs. Une barre sous la ligne est une année en perte.',
+    haut: 200,
+    chiffres: G.chiffres('Les chiffres', ['', 'Recettes', 'Coûts', 'Résultat', 'Marge'],
+      annees.map(function (a) {
+        return [String(a.annee), OF.eur(a.recettes || 0), OF.eur(a.couts || 0),
+          OF.eur(a.resultat || 0),
+          a.recettes ? Math.round(100 * (a.resultat || 0) / a.recettes) + ' %' : '—'];
+      })),
+    dessin: function (larg, haut) {
+      return G.barres({
+        larg: larg, haut: haut, valeurs: valeurs, polarite: true, unite: 'en €',
+        description: 'Résultat sur coûts directs par année, positif ou négatif.'
+      });
+    }
+  });
+}
+
+/* Recettes par domaine et par année : la composition de la trajectoire. */
+function grapheDomaines(zone, annees) {
+  var parDomaine = {};
+  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (p) {
+    if (!p.formation || !p.annee) return;
+    var f = OF.parId(OF.table('Formations'))[p.formation];
+    var d = (f && f.domaine) || 0;
+    (parDomaine[d] = parDomaine[d] || {})[p.annee] = (parDomaine[d][p.annee] || 0) + (p.recette || 0);
+  });
+
+  var cles = Object.keys(parDomaine);
+  var totalDe = function (k) {
+    return annees.reduce(function (n, a) { return n + (parDomaine[k][a.id] || 0); }, 0);
+  };
+  cles = cles.filter(totalDe);
+  if (!cles.length) return;
+  cles.sort(function (x, y) { return totalDe(y) - totalDe(x); });
+
+  /* Au-delà de cinq teintes, on ne distingue plus : les plus petits domaines
+     se regroupent plutôt que de recevoir une couleur de plus. */
+  var series = [], colonnes = [];
+  var garde = cles.length > 5 ? 4 : cles.length;
+  cles.slice(0, garde).forEach(function (k) {
+    series.push(nom('Domaines', +k, 'Domaine non renseigné'));
+    colonnes.push(function (a) { return parDomaine[k][a.id] || 0; });
+  });
+  if (cles.length > garde) {
+    var reste = cles.slice(garde);
+    series.push('Autres domaines (' + reste.length + ')');
+    colonnes.push(function (a) {
+      return reste.reduce(function (n, k) { return n + (parDomaine[k][a.id] || 0); }, 0);
+    });
+  }
+
+  var pilotee = OF.parId(OF.table('Annees'))[idAnnee];
+  var groupes = annees.map(function (a) {
+    var parts = colonnes.map(function (f) { return f(a); });
+    var total = parts.reduce(function (n, v) { return n + v; }, 0);
+    return {
+      libelle: String(a.annee), parts: parts,
+      bulle: '<b>' + a.annee + '</b> — ' + OF.eur(total)
+        + series.map(function (s, i) {
+          return parts[i] ? '<span class="second">' + OF.echappe(s) + ' : ' + OF.eur(parts[i])
+            + ' · ' + Math.round(100 * parts[i] / total) + ' %</span>' : '';
+        }).join('')
+    };
+  });
+
+  G.figure(zone, {
+    titre: 'Recettes par domaine, année par année',
+    sous: 'La hauteur totale est la recette de l\'année ; chaque aplat est un domaine.',
+    haut: 230,
+    series: series.map(function (s, i) {
+      return { nom: s, valeur: pilotee
+        ? OF.eur(colonnes[i](pilotee)) + ' en ' + pilotee.annee : '' };
+    }),
+    chiffres: G.chiffres('Les chiffres',
+      ['Domaine'].concat(annees.map(function (a) { return String(a.annee); })),
+      series.map(function (s, i) {
+        return [s].concat(annees.map(function (a) {
+          return colonnes[i](a) ? OF.eur(colonnes[i](a)) : '—';
+        }));
+      }).concat([['Total'].concat(annees.map(function (a) {
+        var t = colonnes.reduce(function (n, f) { return n + f(a); }, 0);
+        return t ? OF.eur(t) : '—';
+      }))])),
+    dessin: function (larg, haut) {
+      return G.empilees({
+        larg: larg, haut: haut, groupes: groupes, series: series,
+        total: true, unite: 'en €',
+        description: 'Recettes par année, réparties par domaine de formation.'
+      });
+    }
+  });
+}
+
+function grapheRemplissage(zone, annees) {
+  if (!annees.some(function (a) { return a.remplissage_inter; })) return;
+  var valeurs = annees.map(function (a) {
+    return {
+      libelle: String(a.annee),
+      valeur: a.remplissage_inter ? Math.round(100 * a.remplissage_inter) : null,
+      bulle: '<b>' + a.annee + '</b> — remplissage '
+        + (a.remplissage_inter ? Math.round(100 * a.remplissage_inter) + ' %' : 'non calculé')
+        + '<span class="second">' + OF.plur(a.places || 0, 'place') + ' sur '
+        + OF.plur(a.sessions_inter || 0, 'session') + ' inter</span>'
+    };
+  });
+
+  G.figure(zone, {
+    titre: 'Remplissage des sessions inter',
+    sous: 'Places vendues rapportées aux places ouvertes. Au-dessous de 100 %, des places '
+      + 'restent à vendre sur des sessions déjà financées.',
+    haut: 190,
+    chiffres: G.chiffres('Les chiffres', ['', 'Remplissage', 'Places', 'Sessions inter'],
+      annees.map(function (a) {
+        return [String(a.annee),
+          a.remplissage_inter ? Math.round(100 * a.remplissage_inter) + ' %' : '—',
+          OF.ent(a.places || 0), OF.ent(a.sessions_inter || 0)];
+      })),
+    dessin: function (larg, haut) {
+      return G.ligne({
+        larg: larg, haut: haut, valeurs: valeurs, unite: 'en %',
+        echelleFixe: { bas: 0, haut: 100, ticks: [0, 25, 50, 75, 100] },
+        formatY: function (v) { return v + ' %'; },
+        formatVal: function (v) { return v + ' %'; },
+        description: 'Taux de remplissage des sessions inter, année par année.'
+      });
+    }
+  });
+}
+
+/* Le tableau de référence : toutes les lignes, toutes les années. */
+function tableauAnnees(zone, annees) {
+  zone.appendChild(titre('Toutes les lignes, année par année'));
   var t = document.createElement('table');
   t.className = 'matrice';
   t.innerHTML = '<thead><tr><th class="gauche"></th>'
@@ -383,6 +728,9 @@ function pageProjection() {
   ligne('dont inter', brut('sessions_inter', OF.ent));
   ligne('dont intra', brut('sessions_intra', OF.ent));
   ligne('Places', brut('places', OF.ent));
+  if (colonneExiste('Annees', 'heures_stagiaires')) {
+    ligne('Heures stagiaires', brut('heures_stagiaires', OF.ent));
+  }
   ligne('Remplissage inter', function (a) {
     return { texte: a.remplissage_inter ? Math.round(100 * a.remplissage_inter) + ' %' : '—' };
   });
@@ -395,67 +743,202 @@ function pageProjection() {
   ligne('Taux de marge', function (a) {
     return { texte: a.recettes ? Math.round(100 * (a.resultat || 0) / a.recettes) + ' %' : '—' };
   });
-  ligne('Objectif de recettes', brut('objectif_ca', OF.eur));
-  ligne('Écart à l\'objectif', function (a) {
-    if (!a.objectif_ca) return { texte: '—' };
-    var e = (a.recettes || 0) - a.objectif_ca;
-    return { texte: (e >= 0 ? '+' : '') + OF.eur(e), classe: e >= 0 ? 'positif' : 'negatif' };
+  objectifsTenus().forEach(function (o) {
+    ligne('Objectif · ' + o.libelle, brut(o.col, o.format));
+    ligne('Écart · ' + o.libelle, function (a) {
+      if (!a[o.col]) return { texte: '—' };
+      var e = (a[o.reel] || 0) - a[o.col];
+      return { texte: (e >= 0 ? '+' : '') + o.format(e), classe: e >= 0 ? 'positif' : 'negatif' };
+    });
   });
   ligne('Intervenants à recruter', function (a) {
     var r = somme(vivierDe(a.id), 'a_recruter');
     return { texte: r ? OF.ent(r) : '—', classe: r ? 'negatif' : '' };
   });
   t.appendChild(corps);
-  zone.appendChild(t);
-
-  /* la part de chaque domaine sur l'année pilotée */
-  var parDomaine = {};
-  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (p) {
-    if (p.annee !== idAnnee || !p.formation) return;
-    var f = OF.parId(OF.table('Formations'))[p.formation];
-    var d = (f && f.domaine) || 0;
-    parDomaine[d] = (parDomaine[d] || 0) + (p.recette || 0);
-  });
-  var total = Object.keys(parDomaine).reduce(function (n, k) { return n + parDomaine[k]; }, 0);
-  if (total) {
-    var annee = OF.parId(OF.table('Annees'))[idAnnee];
-    zone.appendChild(titre('Recettes par domaine en ' + (annee ? annee.annee : '')));
-    var barres = document.createElement('div');
-    barres.className = 'barres';
-    Object.keys(parDomaine).sort(function (a, b) { return parDomaine[b] - parDomaine[a]; })
-      .forEach(function (k) {
-        var part = Math.round(100 * parDomaine[k] / total);
-        var l = document.createElement('div');
-        l.className = 'barre-ligne';
-        l.innerHTML = '<span>' + OF.echappe(nom('Domaines', +k, 'Domaine non renseigné'))
-          + '</span><span class="jauge"><span style="width:' + Math.max(part, 1) + '%"></span></span>'
-          + '<span class="calcul">' + OF.eur(parDomaine[k]) + ' · ' + part + ' %</span>';
-        barres.appendChild(l);
-      });
-    zone.appendChild(barres);
-  }
-
-  var note = document.createElement('p');
-  note.className = 'aide';
-  note.textContent = 'Tous ces chiffres sont lus dans les colonnes calculées du document : '
-    + 'ils ne sont pas recalculés ici, et ne peuvent donc pas en diverger. Le résultat est un '
-    + 'résultat sur coûts directs — les charges indirectes de structure restent au budget global.';
-  zone.appendChild(note);
-  return zone;
+  zone.appendChild(defilant(t));
 }
 
-function titre(t) {
-  var h = document.createElement('h2');
-  h.textContent = t;
-  return h;
+/* Un tableau plus large que le widget défile dans sa bande ; il ne pousse pas
+   la page, sinon tout l'écran se décale horizontalement. */
+function defilant(t) {
+  var d = document.createElement('div');
+  d.className = 'defilant';
+  d.appendChild(t);
+  return d;
+}
+
+/* ---------------------------------------------------------- objectifs -- */
+/* La seule saisie de cet écran. Un objectif ne se calcule pas : il se
+   décide. On l'écrit donc dans la table Annees, à côté du réalisé qui lui
+   fait face. */
+function editeurObjectifs(zone, annees) {
+  var possibles = objectifsPossibles();
+  var tenus = objectifsTenus();
+  var manquants = possibles.filter(function (o) { return tenus.indexOf(o) < 0; });
+
+  zone.appendChild(titre('Fixer les objectifs'));
+
+  if (!OF.doc.metaOk) {
+    var m = document.createElement('p');
+    m.className = 'alerte-bloc';
+    m.textContent = 'Les types de colonnes du document ne sont pas lisibles : les objectifs '
+      + 'restent affichés mais ne sont pas modifiables ici, pour ne pas risquer d\'écrire une '
+      + 'valeur du mauvais type. Vérifiez que le widget a l\'accès complet au document.';
+    zone.appendChild(m);
+    return;
+  }
+
+  if (tenus.length) {
+    var p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = 'Saisie directe : la valeur part à l\'enregistrement quand vous quittez la '
+      + 'case ou appuyez sur Entrée. Les graphiques et les écarts se recalculent ensuite depuis '
+      + 'le document.';
+    zone.appendChild(p);
+
+    var t = document.createElement('table');
+    t.className = 'matrice objectifs';
+    t.style.marginTop = '12px';
+    t.innerHTML = '<thead><tr><th class="gauche">Année</th>'
+      + tenus.map(function (o) { return '<th>' + OF.echappe(o.libelle) + '</th>'; }).join('')
+      + '<th class="calcule">Réalisé projeté</th><th>Écart</th></tr></thead>';
+    var corps = document.createElement('tbody');
+
+    annees.forEach(function (a) {
+      var tr = document.createElement('tr');
+      var tdA = document.createElement('td');
+      tdA.className = 'gauche an';
+      tdA.textContent = a.annee;
+      tr.appendChild(tdA);
+
+      tenus.forEach(function (o) {
+        var td = document.createElement('td');
+        td.className = 'gauche';
+        td.appendChild(celluleObjectif(a, o));
+        tr.appendChild(td);
+      });
+
+      var premier = tenus[0];
+      var reel = a[premier.reel] || 0;
+      var tdR = document.createElement('td');
+      tdR.className = 'calcul calcule';
+      tdR.textContent = premier.format(reel);
+      tr.appendChild(tdR);
+
+      var tdE = document.createElement('td');
+      tdE.className = 'calcul';
+      if (a[premier.col]) {
+        var e = reel - a[premier.col];
+        tdE.textContent = (e >= 0 ? '+' : '') + premier.format(e);
+        tdE.classList.add(e >= 0 ? 'positif' : 'negatif');
+      } else {
+        tdE.textContent = '—';
+      }
+      tr.appendChild(tdE);
+      corps.appendChild(tr);
+    });
+    t.appendChild(corps);
+    zone.appendChild(defilant(t));
+
+    var leg = document.createElement('p');
+    leg.className = 'note';
+    leg.style.marginTop = '10px';
+    leg.textContent = 'Les deux dernières colonnes confrontent l\'objectif de ' +
+      tenus[0].libelle.toLowerCase() + ' au réalisé projeté.';
+    zone.appendChild(leg);
+  }
+
+  if (manquants.length) {
+    var bloc = document.createElement('p');
+    bloc.className = 'note';
+    bloc.style.marginTop = tenus.length ? '18px' : '0';
+    bloc.textContent = tenus.length
+      ? 'D\'autres objectifs peuvent être suivis — ' + manquants.map(function (o) {
+          return o.libelle.toLowerCase();
+        }).join(', ') + ' — mais la colonne correspondante n\'existe pas encore dans la table '
+        + 'Annees.'
+      : 'Aucune colonne d\'objectif n\'existe encore dans la table Annees. Elle peut être créée '
+        + 'd\'ici : une colonne numérique par objectif, à côté du réalisé.';
+    zone.appendChild(bloc);
+
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'outil';
+    b.style.marginTop = '10px';
+    b.textContent = 'Créer ' + (manquants.length > 1
+      ? 'les ' + manquants.length + ' colonnes d\'objectif manquantes'
+      : 'la colonne « ' + manquants[0].titre + ' »');
+    b.addEventListener('click', function () {
+      b.disabled = true;
+      OF.appliquer(manquants.map(function (o) {
+        return ['AddVisibleColumn', 'Annees', o.col, {
+          type: 'Numeric', label: o.titre, widgetOptions: '{"decimals":0,"maxDecimals":0}'
+        }];
+      }), TABLES, function () {
+        OF.chargerColonnes().then(rendre);
+      }).catch(function () { b.disabled = false; });
+    });
+    zone.appendChild(b);
+  }
+}
+
+function celluleObjectif(annee, obj) {
+  var el = document.createElement('input');
+  el.className = 'champ';
+  el.id = 'obj-' + obj.col + '-' + annee.id;
+  el.inputMode = 'decimal';
+  el.placeholder = '—';
+  el.setAttribute('aria-label', obj.titre + ' ' + annee.annee);
+  var v = annee[obj.col];
+  el.value = (v || v === 0) ? OF.ent(v) : '';
+  var origine = el.value;
+
+  /* une colonne formule ne se saisit pas : on l'affiche sans la proposer */
+  if (OF.colonne('Annees', obj.col).formule) {
+    el.disabled = true;
+    el.title = 'Calculé par le document';
+    return el;
+  }
+
+  /* Enregistrement à la sortie du champ, pas pendant la frappe : l'écran se
+     redessine après coup, et on ne redessine pas sous les doigts. */
+  el.addEventListener('change', function () {
+    var brut = el.value.trim();
+    var val = brut === '' ? null : OF.nombre(brut);
+    if (val !== null && !obj.signe && val < 0) {
+      el.classList.add('erreur');
+      OF.signaler('Un objectif négatif n\'a pas de sens ici', true);
+      return;
+    }
+    if ((val === null && origine === '') || (val !== null && OF.ent(val) === origine)) return;
+    el.classList.remove('erreur');
+    var champs = {};
+    champs[obj.col] = val;
+    focusARendre = el.id;
+    OF.appliquer([['UpdateRecord', 'Annees', annee.id, champs]], TABLES, rendre)
+      .catch(function () { el.classList.add('erreur'); focusARendre = null; });
+  });
+  el.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') { el.value = origine; el.blur(); }
+    if (ev.key === 'Enter') el.blur();
+  });
+  return el;
 }
 
 /* ------------------------------------------------------------- montage -- */
 function rendre() {
+  G.oublier();
   var page = OF.$('page');
   page.innerHTML = '';
   page.appendChild(ongletCourant === 'recrutement' ? pageRecrutement() : pageProjection());
+  G.redessiner();            // la largeur n'est connue qu'une fois la page posée
   rendreAvance();
+  if (focusARendre) {
+    var el = OF.$(focusARendre);
+    focusARendre = null;
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }
 }
 
 function rendreAvance() {
