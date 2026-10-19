@@ -260,6 +260,17 @@ var OF = (function () {
     sel.className = 'saisie';
     if (avecVide) sel.appendChild(new Option('—', ''));
     options.forEach(function (o) { sel.appendChild(new Option(o.nom, o.id)); });
+    /* Une valeur que la liste ne propose pas s'afficherait vide, et le premier
+       changement l'effacerait sans rien dire. On l'ajoute plutôt, signalée :
+       c'est au document de trancher, pas au widget. */
+    var presente = texte(valeur) === '' || options.some(function (o) {
+      return texte(o.id) === texte(valeur);
+    });
+    if (!presente) {
+      var hors = new Option(texte(valeur) + ' (hors liste)', texte(valeur));
+      sel.insertBefore(hors, sel.firstChild);
+      sel.title = 'Cette valeur ne fait pas partie des choix de la colonne';
+    }
     sel.value = texte(valeur);
     sel.addEventListener('change', function () {
       var v = sel.value;

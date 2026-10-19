@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=8">
+<link rel="stylesheet" href="commun.css?v=10">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=8"></script>
+<script src="commun.js?v=10"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v8';
+var VERSION = 'v10';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -853,81 +853,70 @@ function projections(f) {
   return zone;
 }
 
-/* Toutes les lignes qui alimentent la recette de l'année, inter et intra.
-   La grille au-dessus ne montre qu'une case par segment ; dès qu'une année
-   porte autre chose — une vente intra, une seconde ligne sur le même segment,
-   un autre tarif — c'est ici que la différence se voit, au lieu de rester une
-   énigme entre deux années d'apparence identique. */
+/* Toutes les lignes de vente inter de la formation, modifiables. La grille
+   au-dessus ne montre qu'une case par segment et par année : dès qu'une année
+   en porte deux, ou une ligne sur un segment que la formation ne vise plus,
+   la case ne peut pas la montrer. Ici si, et on peut la corriger.
+
+   Les ventes intra ont leur propre section plus bas : elles n'entrent pas
+   dans la recette des projections, qui ne compte que l'inter. */
+var detailOuvert = false;
+
 function detailVentes(f, annees) {
   var d = document.createElement('details');
   d.className = 'chiffres';
   d.style.marginTop = '14px';
+  d.open = detailOuvert;
+  d.addEventListener('toggle', function () { detailOuvert = d.open; });
 
-  var lignes = [];
-  annees.forEach(function (a) {
-    OF.table('Ventes_inter').filter(function (v) {
-      return v.formation === f.id && v.annee === a.id;
-    }).forEach(function (v) {
-      var col = colonneQuantite(v);
-      var cat = v.categorie_appliquee || v.categorie;
-      lignes.push([String(a.annee), 'inter', nomSegment(v.segment),
-        OF.texte(v.base) || '—',
-        cat ? nomCategorie(cat) : '—',
-        col === 'nb_groupes'
-          ? OF.plur(v.nb_groupes, 'groupe')
-            + ' de ' + OF.ent(v.participants_par_groupe || f.effectif_max || 0)
-          : OF.plur(v.nb_places, 'place'),
-        (v.places || v.places === 0) ? OF.ent(v.places) : '—',
-        v.recette ? OF.eur(v.recette) : '—',
-        OF.texte(v.alerte)]);
+  var rang = OF.parId(OF.table('Annees'));
+  var lignes = OF.table('Ventes_inter')
+    .filter(function (v) { return v.formation === f.id; })
+    .sort(function (x, y) {
+      var ax = (rang[x.annee] && rang[x.annee].annee) || 0;
+      var ay = (rang[y.annee] && rang[y.annee].annee) || 0;
+      return ax - ay || OF.texte(nomSegment(x.segment))
+        .localeCompare(OF.texte(nomSegment(y.segment)), 'fr');
     });
-    OF.table('Ventes_intra').filter(function (v) {
-      return v.formation === f.id && v.annee === a.id;
-    }).forEach(function (v) {
-      var ci = v.categorie_appliquee || v.categorie;
-      lignes.push([String(a.annee), 'intra', nomSegment(v.segment),
-        OF.texte(v.base) || '—',
-        ci ? nomCategorie(ci) : '—',
-        OF.plur(v.nb_sessions, 'session')
-          + ' de ' + OF.ent(v.participants_par_session || f.effectif_max || 0),
-        (v.places || v.places === 0) ? OF.ent(v.places) : '—',
-        v.recette ? OF.eur(v.recette) : '—',
-        '']);
-    });
-  });
 
   var s = document.createElement('summary');
   s.textContent = lignes.length
-    ? 'Le détail des ' + OF.plur(lignes.length, 'ligne') + ' de vente'
-    : 'Le détail des lignes de vente';
+    ? 'Le détail des ' + OF.plur(lignes.length, 'ligne') + ' de vente inter'
+    : 'Le détail des lignes de vente inter';
   d.appendChild(s);
 
-  if (!lignes.length) {
-    var vide = document.createElement('p');
-    vide.className = 'note';
-    vide.textContent = 'Aucune ligne de vente pour cette formation.';
-    d.appendChild(vide);
-    return d;
+  var colonnes = [
+    { col: 'annee', libelle: 'Année', type: 'ref', ref: 'Annees' },
+    { col: 'segment', libelle: 'Segment', type: 'ref', ref: 'Segments' },
+    { col: 'base', libelle: 'Base de facturation', type: 'choice' },
+    { col: 'categorie', libelle: 'Tarif', type: 'ref', ref: 'Categories_tarifaires' },
+    { col: 'nb_places', libelle: 'Places', type: 'num' },
+    { col: 'nb_groupes', libelle: 'Groupes', type: 'num' }
+  ];
+  if (colExiste('Ventes_inter', 'participants_par_groupe')) {
+    colonnes.push({ col: 'participants_par_groupe', libelle: 'Par groupe', type: 'num' });
+  }
+  if (colExiste('Ventes_inter', 'places')) {
+    colonnes.push({ col: 'places', libelle: 'Places occupées', type: 'calcul', format: OF.ent });
+  }
+  colonnes.push({ col: 'recette', libelle: 'Recette', type: 'calcul', format: OF.eur });
+  if (colExiste('Ventes_inter', 'alerte')) {
+    colonnes.push({ col: 'alerte', libelle: 'Ce que dit le document', type: 'calcul',
+      format: OF.texte });
   }
 
   var cadre = document.createElement('div');
   cadre.className = 'defilant';
-  var t = document.createElement('table');
-  t.className = 'matrice';
-  var entetes = ['Année', 'Vente', 'Segment', 'Base de facturation', 'Tarif', 'Quantité',
-    'Places', 'Recette', 'Ce que dit le document'];
-  t.innerHTML = '<thead><tr>'
-    + entetes.map(function (h, i) {
-      return '<th class="' + (i === 6 || i === 7 ? '' : 'gauche') + '">' + OF.echappe(h) + '</th>';
-    }).join('')
-    + '</tr></thead><tbody>' + lignes.map(function (L) {
-      return '<tr>' + L.map(function (c, i) {
-        var classe = (i === 6 || i === 7) ? 'calcul' : 'gauche libelle';
-        if (i === 8 && c) classe = 'gauche second alerte-texte';
-        return '<td class="' + classe + '">' + OF.echappe(c) + '</td>';
-      }).join('') + '</tr>';
-    }).join('') + '</tbody>';
-  cadre.appendChild(t);
+  cadre.appendChild(OF.sousTable({
+    table: 'Ventes_inter',
+    lignes: lignes,
+    colonnes: colonnes,
+    nouveau: { formation: f.id },
+    relire: RELIRE,
+    apres: rendreTout,
+    libelleAjout: 'Ajouter une ligne de vente',
+    vide: 'Aucune ligne de vente inter pour cette formation.'
+  }));
   d.appendChild(cadre);
 
   var n = document.createElement('p');
@@ -935,7 +924,7 @@ function detailVentes(f, annees) {
   n.style.marginTop = '10px';
   n.textContent = 'Deux années qui portent les mêmes nombres dans la grille mais pas la même '
     + 'recette ont forcément une ligne de plus, un autre tarif ou une autre base : elle est '
-    + 'dans ce tableau.';
+    + 'dans ce tableau. « Retirer » demande confirmation avant de supprimer la ligne.';
   d.appendChild(n);
   return d;
 }
@@ -1391,7 +1380,16 @@ function rafraichir() {
   rendreRail();
 }
 
-function rendreTout() { rendreFiche(); rendreRail(); }
+/* Après une écriture, on reconstruit la fiche — mais on rend sa place au
+   lecteur : rien n'est plus désagréable qu'un écran qui remonte en haut
+   parce qu'on vient de retirer une ligne tout en bas. */
+function rendreTout() {
+  var fiche = OF.$('fiche');
+  var y = fiche ? fiche.scrollTop : 0;
+  rendreFiche();
+  rendreRail();
+  if (fiche) fiche.scrollTop = y;
+}
 
 /* ------------------------------------------------------------- montage -- */
 OF.$('recherche').addEventListener('input', function (ev) { filtre = ev.target.value; rendreRail(); });
