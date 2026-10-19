@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fiche formation</title>
+<script src="https://grist.numerique.gouv.fr/grist-plugin-api.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="commun.css">
+</head>
+<body>
+<div id="app" aria-busy="true">
+  <div class="barre">
+    <input class="recherche" id="recherche" type="search" placeholder="Chercher une formation"
+           aria-label="Chercher une formation" autocomplete="off">
+    <div class="avance" id="avance"></div>
+    <div class="nav">
+      <button class="outil" id="prec" type="button" title="Formation précédente (Alt + ←)">Précédente</button>
+      <button class="outil" id="suiv" type="button" title="Formation suivante (Alt + →)">Suivante</button>
+    </div>
+  </div>
+  <div class="corps">
+    <div class="rail" id="rail" role="list"></div>
+    <div class="fiche" id="fiche"><p class="vide">Chargement du document…</p></div>
+  </div>
+</div>
+<div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
+
+<script src="commun.js"></script>
+<script>
+/* =========================================================================
+   Fiche formation — définition, intervenants et projections au même endroit.
+
+   Tout ce qui décrit une formation et tout ce qui la projette tient dans un
+   écran : on ouvre une formation, on la décrit, on dit combien de sessions
+   et combien de places, et on passe à la suivante. Aucune référence à
+   choisir ligne par ligne, aucune table à ouvrir à côté.
+   ========================================================================= */
+'use strict';
+
+var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
+  'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
+  'Gestionnaire', 'Metiers', 'Enjeux', 'Obligations', 'Intervenants', 'Intervenants_formation',
+  'Besoins_salles', 'Types_salles'];
+
+var courant = null, filtre = '';
+
+/* ------------------------------------------------------- accès données -- */
+function projDe(idAnnee, idFormation) {
+  return OF.table('Projections').filter(function (p) {
+    return p.annee === idAnnee && p.formation === idFormation;
+  });
+}
+function venteDe(idAnnee, idFormation, idSegment) {
+  return OF.table('Ventes_inter').filter(function (v) {
+    return v.annee === idAnnee && v.formation === idFormation && v.segment === idSegment;
+  })[0] || null;
+}
+function segmentsDe(f) {
+  var connus = OF.parId(OF.table('Segments'));
+  return OF.refs(f.segments).filter(function (id) { return connus[id]; });
+}
+function nomSegment(id) {
+  var s = OF.parId(OF.table('Segments'))[id];
+  return s ? (OF.texte(s.intitule) || ('Segment ' + id)) : ('Segment ' + id);
+}
+function intervenantsDe(f) {
+  return OF.table('Intervenants_formation').filter(function (i) { return i.formation === f.id; });
+}
+function categorieUnique(idSegment) {
+  var cats = OF.table('Segments_categories').filter(function (m) {
+    return m.segment === idSegment && m.categorie;
+  }).map(function (m) { return m.categorie; });
+  return cats.length === 1 ? cats[0] : null;
+}
+function lieux() {
+  var vus = {};
+  OF.table('Projections').forEach(function (p) { if (OF.texte(p.localisation)) vus[p.localisation] = 1; });
+  var l = OF.choixDe('Projections', 'localisation');
+  return l.length ? l : (Object.keys(vus).length ? Object.keys(vus) : ['OF', 'Extérieur']);
+}
+
+/* Une année compte dès qu'elle porte des sessions ; la formation est
+   complète quand, pour chacune, les places sont renseignées sur chaque
+   segment visé. Sans session, rien n'est en retard : elle n'est pas vendue. */
+function avancement(f) {
+  var segs = segmentsDe(f), attendus = 0, remplis = 0, actives = 0;
+  OF.anneesTriees().forEach(function (a) {
+    var sessions = projDe(a.id, f.id).reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0);
+    if (!sessions) return;
+    actives++;
+    segs.forEach(function (idSeg) {
+      attendus++;
+      var v = venteDe(a.id, f.id, idSeg);
+      if (v && (v.nb_places || v.nb_groupes)) remplis++;
+    });
+  });
+  if (!actives) return { etat: 'vide', remplis: 0, attendus: 0 };
+  if (!segs.length) return { etat: 'sans-segment', remplis: 0, attendus: 0 };
+  return { etat: remplis >= attendus ? 'fait' : 'partiel', remplis: remplis, attendus: attendus };
+}
+
+/* ------------------------------------------------------------ écriture -- */
+var RELIRE = ['Formations', 'Projections', 'Ventes_inter', 'Intervenants_formation'];
+
+function ecrireSessions(idAnnee, f, valeur, lieu) {
+  var lignes = projDe(idAnnee, f.id);
+  if (lignes.length > 1) return Promise.resolve();
+  if (lignes.length === 1) {
+    var maj = { nb_sessions: valeur };
+    if (lieu !== undefined) maj.localisation = lieu;
+    return OF.appliquer([['UpdateRecord', 'Projections', lignes[0].id, maj]], RELIRE, rafraichir);
+  }
+  var champs = { annee: idAnnee, formation: f.id, nb_sessions: valeur };
+  if (lieu !== undefined) champs.localisation = lieu;
+  return OF.appliquer([['AddRecord', 'Projections', null, champs]], RELIRE, rafraichir);
+}
+
+function ecrirePlaces(idAnnee, f, idSegment, valeur) {
+  var v = venteDe(idAnnee, f.id, idSegment);
+  if (v) {
+    return OF.appliquer([['UpdateRecord', 'Ventes_inter', v.id, { nb_places: valeur }]],
+      RELIRE, rafraichir);
+  }
+  var champs = { annee: idAnnee, formation: f.id, segment: idSegment, nb_places: valeur };
+  var cat = categorieUnique(idSegment);
+  if (cat) champs.categorie = cat;
+  return OF.appliquer([['AddRecord', 'Ventes_inter', null, champs]], RELIRE, rafraichir);
+}
+
+function compterEcrasements(f, idSource) {
+  var annees = OF.anneesTriees();
+  var i0 = annees.findIndex(function (a) { return a.id === idSource; });
+  if (i0 < 0) return 0;
+  var segs = segmentsDe(f), n = 0, i, j;
+  for (i = i0 + 1; i < annees.length; i++) {
+    if (projDe(annees[i].id, f.id).some(function (p) { return p.nb_sessions; })) n++;
+    for (j = 0; j < segs.length; j++) {
+      var v = venteDe(annees[i].id, f.id, segs[j]);
+      if (v && v.nb_places) n++;
+    }
+  }
+  return n;
+}
+
+function reprendre(f, idSource, coefficient) {
+  var annees = OF.anneesTriees();
+  var i0 = annees.findIndex(function (a) { return a.id === idSource; });
+  if (i0 < 0) return;
+  var segs = segmentsDe(f), actions = [], i, j;
+  var src = projDe(idSource, f.id);
+  var sessionsSource = src.reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0);
+  var lieuSource = src.length === 1 ? src[0].localisation : undefined;
+
+  for (i = i0 + 1; i < annees.length; i++) {
+    var idA = annees[i].id, puissance = Math.pow(coefficient, i - i0);
+    var lignes = projDe(idA, f.id);
+    if (lignes.length > 1) continue;
+    var sessions = Math.round(sessionsSource * puissance);
+    if (lignes.length === 1) {
+      var maj = { nb_sessions: sessions };
+      if (lieuSource !== undefined && !OF.texte(lignes[0].localisation)) maj.localisation = lieuSource;
+      actions.push(['UpdateRecord', 'Projections', lignes[0].id, maj]);
+    } else {
+      var champs = { annee: idA, formation: f.id, nb_sessions: sessions };
+      if (lieuSource !== undefined) champs.localisation = lieuSource;
+      actions.push(['AddRecord', 'Projections', null, champs]);
+    }
+    for (j = 0; j < segs.length; j++) {
+      var vs = venteDe(idSource, f.id, segs[j]);
+      var places = Math.round(((vs && vs.nb_places) || 0) * puissance);
+      if (!places) continue;
+      var vc = venteDe(idA, f.id, segs[j]);
+      if (vc) {
+        actions.push(['UpdateRecord', 'Ventes_inter', vc.id, { nb_places: places }]);
+      } else {
+        var cv = { annee: idA, formation: f.id, segment: segs[j], nb_places: places };
+        var cat = categorieUnique(segs[j]);
+        if (cat) cv.categorie = cat;
+        actions.push(['AddRecord', 'Ventes_inter', null, cv]);
+      }
+    }
+  }
+  if (!actions.length) { OF.signaler('Rien à reprendre : aucune année après celle-ci'); return; }
+  OF.appliquer(actions, RELIRE, rendreFiche);
+}
+
+/* ---------------------------------------------------------------- rail -- */
+var ETIQUETTES = { fait: 'complète', partiel: 'à compléter', vide: 'sans session',
+  'sans-segment': 'segment à définir' };
+var PASTILLES = { fait: 'p-fait', partiel: 'p-partiel', vide: 'p-vide', 'sans-segment': 'p-partiel' };
+
+function listeFiltree() {
+  var q = filtre.trim().toLowerCase();
+  var l = OF.formationsTriees();
+  if (!q) return l;
+  return l.filter(function (f) {
+    return (OF.texte(f.intitule) + ' ' + OF.texte(f.code)).toLowerCase().indexOf(q) >= 0;
+  });
+}
+
+function rendreRail() {
+  var liste = listeFiltree(), rail = OF.$('rail');
+  if (!liste.length) {
+    rail.innerHTML = '<p class="rail-vide">Aucune formation ne correspond à cette recherche.</p>';
+    rendreAvance();
+    return;
+  }
+  rail.innerHTML = liste.map(function (f) {
+    var a = avancement(f);
+    var detail = a.etat === 'partiel' ? (a.remplis + '/' + a.attendus) : ETIQUETTES[a.etat];
+    return '<button class="item" role="listitem" type="button" data-id="' + f.id + '"'
+      + (courant === f.id ? ' aria-current="true"' : '') + '>'
+      + '<span class="item-nom">' + OF.echappe(f.intitule) + '</span>'
+      + '<span class="item-etat"><span class="pastille ' + PASTILLES[a.etat] + '"></span>'
+      + OF.echappe(detail) + '</span></button>';
+  }).join('');
+  Array.prototype.forEach.call(rail.querySelectorAll('.item'), function (b) {
+    b.addEventListener('click', function () { ouvrir(+b.dataset.id); });
+  });
+  var actif = rail.querySelector('[aria-current="true"]');
+  if (actif && actif.scrollIntoViewIfNeeded) actif.scrollIntoViewIfNeeded();
+  rendreAvance();
+}
+
+function rendreAvance() {
+  var n = { fait: 0, partiel: 0, vide: 0, 'sans-segment': 0 };
+  OF.formationsTriees().forEach(function (f) { n[avancement(f).etat]++; });
+  OF.$('avance').innerHTML =
+    '<span><span class="pastille p-fait"></span><b>' + n.fait + '</b> complètes</span>'
+    + '<span><span class="pastille p-partiel"></span><b>' + (n.partiel + n['sans-segment'])
+      + '</b> à compléter</span>'
+    + '<span><span class="pastille p-vide"></span><b>' + n.vide + '</b> sans session</span>';
+}
+
+/* --------------------------------------------------------------- fiche -- */
+function ouvrir(id) {
+  courant = id;
+  rendreRail();
+  rendreFiche();
+  var fiche = OF.$('fiche');
+  fiche.scrollTop = 0;                       // on reprend la lecture au début
+  var premier = fiche.querySelector('.champ, .saisie');
+  if (premier && premier.focus) premier.focus({ preventScroll: true });
+}
+
+function voisine(pas) {
+  var liste = listeFiltree();
+  var i = liste.findIndex(function (f) { return f.id === courant; });
+  if (i < 0) { if (liste.length) ouvrir(liste[0].id); return; }
+  var j = i + pas;
+  if (j >= 0 && j < liste.length) ouvrir(liste[j].id);
+}
+
+function formationCourante() {
+  return OF.table('Formations').filter(function (x) { return x.id === courant; })[0] || null;
+}
+
+/* Les sept sections de la fiche. `manque` dit si la section réclame encore
+   une information — c'est ce qui allume le point ocre dans le sommaire. */
+var SECTIONS = [
+  { id: 'definition', titre: 'Définition', court: 'Définition', rendu: definition,
+    manque: function (f) { return !!OF.texte(f.champs_manquants); } },
+  { id: 'public', titre: 'Public visé', court: 'Public', rendu: publicVise,
+    manque: function (f) { return !segmentsDe(f).length; } },
+  { id: 'ressources', titre: 'Ressources mobilisées par session', court: 'Ressources',
+    rendu: ressources,
+    manque: function (f) { return f.cout_animation_ok === false || f.salles_ok === false; } },
+  { id: 'cout', titre: "Coût de revient d'une session", court: 'Coût', rendu: cout,
+    manque: function (f) { return !f.cout_total; } },
+  { id: 'projections', titre: 'Projections', court: 'Projections', rendu: projections,
+    manque: function (f) { return avancement(f).etat === 'partiel'; } },
+  { id: 'intra', titre: 'Ventes intra', court: 'Intra', rendu: ventesIntra,
+    manque: function () { return false; } },
+  { id: 'validation', titre: 'Validation', court: 'Validation', rendu: validation,
+    manque: function (f) { return !!OF.texte(f.alerte_validation); } }
+];
+
+var observateur = null;
+
+function construireSommaire(nav, f) {
+  SECTIONS.forEach(function (s, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.cible = 's-' + s.id;
+    b.textContent = s.court;
+    if (i === 0) b.setAttribute('aria-current', 'true');
+    if (s.manque(f)) {
+      var point = document.createElement('span');
+      point.className = 'manque';
+      point.title = 'Il manque une information dans cette section';
+      b.appendChild(point);
+    }
+    b.addEventListener('click', function () {
+      var cible = OF.$(b.dataset.cible);
+      if (!cible) return;
+      var doux = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      cible.scrollIntoView({ behavior: doux ? 'smooth' : 'auto', block: 'start' });
+      marquer(b.dataset.cible);
+      var premier = cible.querySelector('.champ, .saisie, .etiq');
+      if (premier && premier.focus) premier.focus({ preventScroll: true });
+    });
+    nav.appendChild(b);
+  });
+  suivreDefilement();
+}
+
+function marquer(idCible) {
+  Array.prototype.forEach.call(document.querySelectorAll('.sommaire button'), function (b) {
+    if (b.dataset.cible === idCible) b.setAttribute('aria-current', 'true');
+    else b.removeAttribute('aria-current');
+  });
+}
+
+/* Repère la section en cours de lecture : celle dont le haut vient de passer
+   sous le sommaire. */
+function suivreDefilement() {
+  if (observateur) observateur.disconnect();
+  var fiche = OF.$('fiche');
+  observateur = new IntersectionObserver(function (entrees) {
+    var visibles = entrees.filter(function (e) { return e.isIntersecting; });
+    if (!visibles.length) return;
+    visibles.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+    marquer(visibles[0].target.id);
+  }, { root: fiche, rootMargin: '-52px 0px -70% 0px', threshold: 0 });
+  SECTIONS.forEach(function (s) {
+    var el = OF.$('s-' + s.id);
+    if (el) observateur.observe(el);
+  });
+}
+
+function rendreFiche() {
+  var fiche = OF.$('fiche'), f = formationCourante();
+  if (!f) {
+    fiche.innerHTML = '<div class="vide"><p>Choisissez une formation dans la liste pour la '
+      + 'décrire et la projeter.</p><p>La touche <kbd>/</kbd> place le curseur dans la '
+      + 'recherche.</p></div>';
+    return;
+  }
+  fiche.innerHTML = '';
+
+  var titre = document.createElement('h1');
+  titre.textContent = OF.texte(f.intitule);
+  fiche.appendChild(titre);
+
+  var sous = document.createElement('p');
+  sous.className = 'sous';
+  var bouts = [];
+  if (f.duree_h) bouts.push(OF.dec(f.duree_h) + ' heures');
+  if (f.nb_jours) bouts.push(OF.dec(f.nb_jours) + ' jours');
+  if (f.effectif_max) bouts.push(f.effectif_max + ' places par session');
+  sous.textContent = (bouts.length ? bouts.join(', ') : 'Durée et effectif à renseigner')
+    + (OF.texte(f.code) ? ' — code ' + f.code : '');
+  fiche.appendChild(sous);
+
+  /* ce que le document lui-même juge manquant */
+  if (OF.texte(f.champs_manquants)) {
+    var al = document.createElement('p');
+    al.className = 'alerte-bloc';
+    al.textContent = 'Le document signale comme manquant : ' + f.champs_manquants + '.';
+    fiche.appendChild(al);
+  }
+
+  var sommaire = document.createElement('nav');
+  sommaire.className = 'sommaire';
+  sommaire.setAttribute('aria-label', 'Sections de la fiche');
+  fiche.appendChild(sommaire);
+
+  SECTIONS.forEach(function (s) {
+    var section = document.createElement('section');
+    section.id = 's-' + s.id;
+    var h = document.createElement('h2');
+    h.textContent = s.titre;
+    section.appendChild(h);
+    section.appendChild(s.rendu(f));
+    fiche.appendChild(section);
+  });
+  fiche.appendChild(aide());
+  construireSommaire(sommaire, f);
+}
+
+function champ(f, colonne, options) {
+  options = options || {};
+  return OF.editeur({
+    table: 'Formations', colonne: colonne, ligne: f,
+    libelle: options.libelle, multiligne: options.multiligne,
+    manquant: options.manquant, relire: RELIRE,
+    apres: options.leger ? rafraichir : rendreTout
+  });
+}
+
+/* Un champ n'est proposé que si le type de sa colonne est connu : écrire du
+   texte dans une colonne de référence abîmerait la donnée. */
+function ajouterChamps(zone, f, liste, options) {
+  var ignores = [];
+  liste.forEach(function (c) {
+    if (f[c[0]] === undefined) return;
+    if (!OF.typeConnu('Formations', c[0])) { ignores.push(c[1]); return; }
+    zone.appendChild(champ(f, c[0], Object.assign({ libelle: c[1] }, options || {},
+      { manquant: estManquant(f, c[1]) })));
+  });
+  return ignores;
+}
+function estManquant(f, libelle) {
+  return OF.texte(f.champs_manquants).toLowerCase().indexOf(libelle.toLowerCase()) >= 0;
+}
+function noteIgnores(ignores) {
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.style.marginTop = '10px';
+  p.textContent = 'Non modifiables ici faute de connaître leur type : ' + ignores.join(', ')
+    + '. Elles restent accessibles dans la table Formations.';
+  return p;
+}
+
+function definition(f) {
+  var zone = document.createElement('div');
+  if (!OF.doc.metaOk) {
+    var al = document.createElement('p');
+    al.className = 'alerte-bloc grave';
+    al.textContent = 'Les métadonnées de colonnes n\'ont pas pu être lues : la définition reste '
+      + 'en lecture seule pour ne pas risquer d\'écrire une valeur du mauvais type. Vérifiez que '
+      + 'le widget a l\'accès complet au document.';
+    zone.appendChild(al);
+    return zone;
+  }
+  var g = document.createElement('div');
+  g.className = 'grille';
+  var ignores = ajouterChamps(g, f, [
+    ['code', 'Code'], ['intitule', 'Intitulé'], ['domaine', 'Domaine'],
+    ['sous_domaine', 'Sous-domaine'], ['typologie', 'Typologie'], ['duree_h', 'Durée en heures'],
+    ['effectif_max', 'Effectif maximum'], ['modalite', 'Modalité'], ['mode_vente', 'Mode de vente'],
+    ['statut', 'Statut'], ['gestionnaire', 'Gestionnaire'], ['type_salle', 'Type de salle']
+  ], { leger: true });
+  zone.appendChild(g);
+
+  var large = document.createElement('div');
+  large.className = 'grille';
+  large.style.gridTemplateColumns = '1fr';
+  large.style.marginTop = '14px';
+  ignores = ignores.concat(ajouterChamps(large, f, [
+    ['contenu', 'Programme, séquences séparées par des points-virgules'],
+    ['commentaire', 'Commentaire']
+  ], { multiligne: true, leger: true }));
+  zone.appendChild(large);
+  if (ignores.length) zone.appendChild(noteIgnores(ignores));
+  return zone;
+}
+
+function publicVise(f) {
+  var zone = document.createElement('div');
+  if (!OF.doc.metaOk) return zone;
+  var g = document.createElement('div');
+  g.className = 'grille';
+  var ignores = ajouterChamps(g, f, [
+    ['segments', 'Segments de marché visés'], ['metiers', 'Métiers concernés'],
+    ['enjeux', 'Enjeux'], ['obligations', 'Obligations réglementaires']
+  ]);                                   // re-rendu complet : change les colonnes projetées
+  zone.appendChild(g);
+  if (ignores.length) zone.appendChild(noteIgnores(ignores));
+  return zone;
+}
+
+/* --------------------------------------------- ressources mobilisées -- */
+/* Les deux ressources qui font le coût d'une session : qui anime, et dans
+   quelle salle. L'une alimente cout_animation, l'autre les jours-salle et
+   la capacité de l'organisme. */
+function ressources(f) {
+  var zone = document.createElement('div');
+
+  if (f.cout_animation_ok === false || f.salles_ok === false) {
+    var al = document.createElement('p');
+    al.className = 'alerte-bloc';
+    var quoi = [];
+    if (f.cout_animation_ok === false) quoi.push('les intervenants');
+    if (f.salles_ok === false) quoi.push('les besoins en salles');
+    /* « les intervenants » et « les besoins en salles » sont tous deux
+       pluriels : l'accord ne dépend pas du nombre d'éléments listés */
+    al.textContent = 'Le document considère que ' + quoi.join(' et ')
+      + ' ne sont pas complètement décrits : le coût de revient est sous-estimé.';
+    zone.appendChild(al);
+  }
+
+  var h3a = document.createElement('h3');
+  h3a.textContent = 'Qui anime';
+  zone.appendChild(h3a);
+  if (!OF.optionsRef('Intervenants').length) {
+    var vi = document.createElement('p');
+    vi.className = 'note';
+    vi.textContent = 'La table Intervenants est vide : aucun profil à attacher.';
+    zone.appendChild(vi);
+  } else {
+    zone.appendChild(OF.sousTable({
+      table: 'Intervenants_formation',
+      lignes: intervenantsDe(f),
+      colonnes: [
+        { col: 'ressource', libelle: 'Profil', type: 'ref', ref: 'Intervenants' },
+        { col: 'nb_heures', libelle: 'Heures par session', type: 'num' },
+        { col: 'nb_intervenants', libelle: 'Nombre', type: 'num' },
+        { col: 'commentaire', libelle: 'Commentaire', type: 'texte' },
+        { col: 'cout', libelle: 'Coût', type: 'calcul', format: OF.eur }
+      ],
+      nouveau: { formation: f.id, nb_intervenants: 1 },
+      relire: RELIRE, apres: rendreTout,
+      libelleAjout: 'Ajouter un profil',
+      vide: "Sans intervenant décrit, le coût d'animation vaut zéro et la charge de ce "
+        + 'profil reste invisible dans le plan de charge.'
+    }));
+  }
+
+  var h3b = document.createElement('h3');
+  h3b.textContent = 'Dans quelle salle';
+  zone.appendChild(h3b);
+  if (OF.texte(f.modalite) === 'E-learning' || OF.texte(f.modalite) === 'Distanciel') {
+    var nd = document.createElement('p');
+    nd.className = 'note';
+    nd.textContent = 'Formation à distance : aucun besoin de salle.';
+    zone.appendChild(nd);
+  } else if (!OF.optionsRef('Types_salles').length) {
+    var vs = document.createElement('p');
+    vs.className = 'note';
+    vs.textContent = 'La table Types_salles est vide : aucun type de salle à attacher.';
+    zone.appendChild(vs);
+  } else {
+    zone.appendChild(OF.sousTable({
+      table: 'Besoins_salles',
+      lignes: OF.table('Besoins_salles').filter(function (b) { return b.formation === f.id; }),
+      colonnes: [
+        { col: 'type_salle', libelle: 'Type de salle', type: 'ref', ref: 'Types_salles' },
+        { col: 'nb_salles', libelle: 'Salles', type: 'num' },
+        { col: 'nb_jours', libelle: 'Jours', type: 'num', placeholder: OF.dec(f.nb_jours || 0) },
+        { col: 'commentaire', libelle: 'Commentaire', type: 'texte' },
+        { col: 'jours_salle_par_session', libelle: 'Jours-salle', type: 'calcul', format: OF.dec }
+      ],
+      nouveau: { formation: f.id, nb_salles: 1 },
+      relire: RELIRE, apres: rendreTout,
+      libelleAjout: 'Ajouter une salle',
+      vide: 'Sans besoin déclaré, cette formation ne consomme aucun jour de salle dans le '
+        + "calcul de capacité de l'organisme. Laisser les jours vides reprend la durée de "
+        + 'la formation.'
+    }));
+  }
+  return zone;
+}
+
+/* ------------------------------------------------------ coût de revient */
+/* Rien n'est calculé ici : toutes ces valeurs sont des colonnes formules de
+   la table Formations, affichées pour que la construction du coût soit
+   lisible pendant qu'on décrit les ressources. */
+function cout(f) {
+  var zone = document.createElement('div');
+  var lignes = [
+    ['Animation', f.cout_animation, 'Les intervenants ci-dessus, à leur taux horaire chargé'],
+    ['Support et gestion', f.cout_support,
+      'Gestion administrative, logistique, locaux, matériels — au tarif horaire du document'],
+    ['Coût total', f.cout_total, 'Pour une session'],
+    ['Par jour', f.cout_par_jour, ''],
+    ['Par heure', f.cout_par_heure, ''],
+    ['Tarif plancher par jour et par apprenant', f.tarif_plancher_jour, 'Session complète'],
+    ['Tarif plancher au taux de remplissage de référence', f.tarif_plancher_jour_reel, '']
+  ].filter(function (l) { return l[1] !== undefined; });
+
+  if (!lignes.length) {
+    zone.innerHTML = '<p class="note">Les colonnes de coût ne sont pas présentes dans la table '
+      + 'Formations.</p>';
+    return zone;
+  }
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  var corps = document.createElement('tbody');
+  lignes.forEach(function (l, i) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = l[0];
+    if (l[0] === 'Coût total') td.style.fontWeight = '600';
+    if (l[2]) {
+      var s = document.createElement('div');
+      s.className = 'second';
+      s.textContent = l[2];
+      td.appendChild(s);
+    }
+    tr.appendChild(td);
+    var tdv = document.createElement('td');
+    tdv.className = 'calcul calcule';
+    tdv.style.fontSize = l[0] === 'Coût total' ? '15px' : '';
+    if (l[0] === 'Coût total') { tdv.style.fontWeight = '600'; tdv.style.color = 'var(--encre)'; }
+    tdv.textContent = (l[1] || l[1] === 0) ? OF.eur(l[1]) : '—';
+    tr.appendChild(tdv);
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(t);
+
+  var n = document.createElement('p');
+  n.className = 'note';
+  n.style.marginTop = '12px';
+  n.textContent = "C'est un coût direct : les charges indirectes de structure — logistique "
+    + 'médicale, prestations hôtelières, informatique, ressources humaines — restent au budget '
+    + "global de l'organisme. Le tarif plancher est le prix en dessous duquel une session ne "
+    + 'couvre plus son propre coût.';
+  zone.appendChild(n);
+  return zone;
+}
+
+/* --------------------------------------------------------- projections -- */
+function projections(f) {
+  var zone = document.createElement('div');
+  var segs = segmentsDe(f), annees = OF.anneesTriees();
+
+  if (!annees.length) {
+    zone.innerHTML = '<p class="note">Aucune année dans la table Annees.</p>';
+    return zone;
+  }
+  if (!segs.length) {
+    var al = document.createElement('p');
+    al.className = 'alerte-bloc';
+    al.textContent = 'Aucun segment de marché visé : choisissez-en au moins un plus haut pour '
+      + 'pouvoir saisir les places vendues. Le nombre de sessions reste saisissable.';
+    zone.appendChild(al);
+  }
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  var entete = '<thead><tr><th class="gauche">Année</th><th>Sessions</th><th></th>';
+  segs.forEach(function (id) { entete += '<th>' + OF.echappe(nomSegment(id)) + '</th>'; });
+  entete += '<th class="calcule">Remplissage</th><th>Recette</th><th>Résultat</th></tr></thead>';
+  t.innerHTML = entete;
+
+  var corps = document.createElement('tbody');
+  var choixLieu = lieux();
+
+  annees.forEach(function (a, iAn) {
+    var lignes = projDe(a.id, f.id);
+    var sessions = lignes.reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0);
+    var tr = document.createElement('tr');
+    tr.dataset.ligne = iAn;
+    if (sessions) tr.className = 'remplie';
+
+    var tdAn = document.createElement('td');
+    tdAn.className = 'an';
+    tdAn.textContent = a.annee;
+    tr.appendChild(tdAn);
+
+    if (lignes.length > 1) {
+      var tdM = document.createElement('td');
+      var inM = document.createElement('input');
+      inM.className = 'champ'; inM.value = sessions; inM.disabled = true;
+      inM.title = 'Plusieurs lignes de projection pour cette année';
+      tdM.appendChild(inM);
+      tr.appendChild(tdM);
+      var tdD = document.createElement('td');
+      tdD.className = 'doublon';
+      tdD.textContent = lignes.length + ' lignes';
+      tr.appendChild(tdD);
+    } else {
+      tr.appendChild(cellSessions(f, a, iAn, sessions));
+      var tdL = document.createElement('td');
+      var bL = document.createElement('button');
+      bL.type = 'button'; bL.className = 'lieu';
+      bL.textContent = (lignes.length === 1 && OF.texte(lignes[0].localisation)) || choixLieu[0];
+      bL.addEventListener('click', function () {
+        var i = choixLieu.indexOf(bL.textContent.trim());
+        var suivant = choixLieu[(i + 1) % choixLieu.length];
+        bL.textContent = suivant;
+        var l = projDe(a.id, f.id);
+        ecrireSessions(a.id, f, l.length === 1 ? (l[0].nb_sessions || 0) : 0, suivant);
+      });
+      tdL.appendChild(bL);
+      tr.appendChild(tdL);
+    }
+
+    segs.forEach(function (idSeg, iSeg) {
+      tr.appendChild(cellPlaces(f, a, idSeg, iAn, iSeg + 1, sessions));
+    });
+
+    ['remplissage', 'recette', 'resultat'].forEach(function (quoi) {
+      var td = document.createElement('td');
+      td.className = 'calcul' + (quoi === 'remplissage' ? ' calcule' : '');
+      td.dataset.calc = quoi;
+      tr.appendChild(td);
+    });
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(t);
+  zone.appendChild(outilsReprise(f, annees));
+  zone.appendChild(bilan(f));
+  return zone;
+}
+
+function cellSessions(f, a, iAn, sessions) {
+  var td = document.createElement('td');
+  var el = document.createElement('input');
+  el.className = 'champ';
+  el.inputMode = 'numeric';
+  el.placeholder = '—';
+  el.value = sessions || '';
+  el.dataset.role = 'sessions';
+  el.dataset.ligne = iAn;
+  el.dataset.col = 0;
+  el.setAttribute('aria-label', 'Sessions en ' + a.annee);
+  brancherCellule(el, function (v) { return ecrireSessions(a.id, f, v); });
+  td.appendChild(el);
+  return td;
+}
+
+function cellPlaces(f, a, idSeg, iAn, iCol, sessions) {
+  var td = document.createElement('td');
+  var v = venteDe(a.id, f.id, idSeg);
+  var el = document.createElement('input');
+  el.className = 'champ' + (sessions && !(v && v.nb_places) ? ' vide-attendu' : '');
+  el.inputMode = 'numeric';
+  el.placeholder = '—';
+  el.value = (v && v.nb_places) || '';
+  el.dataset.role = 'places';
+  el.dataset.segment = idSeg;
+  el.dataset.ligne = iAn;
+  el.dataset.col = iCol;
+  el.setAttribute('aria-label', 'Places ' + nomSegment(idSeg) + ' en ' + a.annee);
+  brancherCellule(el, function (val) { return ecrirePlaces(a.id, f, idSeg, val); });
+  td.appendChild(el);
+  return td;
+}
+
+function brancherCellule(el, ecrire) {
+  var origine = el.value;
+  var cle = el.dataset.role + ':' + el.dataset.ligne + ':' + (el.dataset.segment || '');
+  var enregistrer = function () {
+    var v = el.value.trim() === '' ? 0 : Math.round(OF.nombre(el.value));
+    if (v < 0) {
+      el.classList.add('erreur');
+      OF.signaler('Un nombre négatif n\'a pas de sens ici', true);
+      return;
+    }
+    ecrire(v).catch(function () { el.classList.add('erreur'); });
+  };
+  el.addEventListener('input', function () {
+    el.classList.remove('erreur');
+    OF.differer(cle, enregistrer);
+  });
+  el.addEventListener('blur', function () { if (OF.forcer(cle)) enregistrer(); });
+  el.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') { el.value = origine; el.blur(); return; }
+    if (ev.key === 'ArrowDown' || ev.key === 'Enter') { ev.preventDefault(); deplacer(el, 1); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); deplacer(el, -1); }
+  });
+}
+
+function deplacer(el, pas) {
+  var cible = OF.$('fiche').querySelector(
+    '.champ[data-ligne="' + (+el.dataset.ligne + pas) + '"][data-col="' + el.dataset.col + '"]');
+  if (cible) { cible.focus(); cible.select(); } else el.blur();
+}
+
+function outilsReprise(f, annees) {
+  var zone = document.createElement('div');
+  zone.className = 'outils';
+  zone.innerHTML = '<span>Reprendre</span>';
+  var sel = document.createElement('select');
+  sel.className = 'lieu';
+  sel.setAttribute('aria-label', 'Année à reprendre');
+  annees.forEach(function (a) { sel.appendChild(new Option(a.annee, a.id)); });
+  zone.appendChild(sel);
+  var t1 = document.createElement('span');
+  t1.textContent = 'sur les années suivantes, en multipliant par';
+  zone.appendChild(t1);
+  var coef = document.createElement('input');
+  coef.className = 'coef'; coef.value = '1'; coef.inputMode = 'decimal';
+  coef.setAttribute('aria-label', 'Coefficient par an');
+  zone.appendChild(coef);
+  var t2 = document.createElement('span');
+  t2.textContent = 'chaque année';
+  zone.appendChild(t2);
+
+  var b = document.createElement('button');
+  b.type = 'button'; b.className = 'outil'; b.textContent = 'Reprendre';
+  var arme = false, minuteur = null;
+  var desarmer = function () {
+    arme = false; clearTimeout(minuteur);
+    b.textContent = 'Reprendre'; b.classList.remove('attention');
+  };
+  b.addEventListener('click', function () {
+    var c = OF.nombre(coef.value) || 1;
+    if (c <= 0) { OF.signaler('Le coefficient doit être supérieur à zéro', true); return; }
+    var ecrases = compterEcrasements(f, +sel.value);
+    if (ecrases && !arme) {            // on ne remplace jamais une saisie sans le dire
+      arme = true;
+      b.textContent = 'Confirmer : ' + OF.plur(ecrases, 'valeur') + ' '
+        + OF.accord(ecrases, 'remplacée', 'remplacées');
+      b.classList.add('attention');
+      minuteur = setTimeout(desarmer, 6000);
+      return;
+    }
+    desarmer();
+    reprendre(f, +sel.value, c);
+  });
+  sel.addEventListener('change', desarmer);
+  coef.addEventListener('input', desarmer);
+  zone.appendChild(b);
+  return zone;
+}
+
+function bilan(f) {
+  var dl = document.createElement('dl');
+  dl.className = 'bilan';
+  [['tot-sessions', 'Sessions, toutes années'], ['tot-recette', 'Recettes'],
+   ['tot-resultat', 'Résultat'], ['tot-cout', 'Coût d\'une session']
+  ].forEach(function (c) {
+    var d = document.createElement('div');
+    var dt = document.createElement('dt');
+    dt.textContent = c[1];
+    var dd = document.createElement('dd');
+    dd.id = c[0];
+    d.appendChild(dt);
+    d.appendChild(dd);
+    dl.appendChild(d);
+  });
+  return dl;
+}
+
+function aide() {
+  var p = document.createElement('p');
+  p.className = 'aide';
+  p.innerHTML = '<kbd>↑</kbd> <kbd>↓</kbd> passent d\'une année à l\'autre dans la même colonne, '
+    + '<kbd>Entrée</kbd> descend d\'une ligne, <kbd>Échap</kbd> annule la frappe en cours. '
+    + '<kbd>Alt</kbd> + <kbd>←</kbd> <kbd>→</kbd> changent de formation, <kbd>/</kbd> va à la '
+    + 'recherche. Remplissage, recette, résultat et coût sont ceux que calcule le document : '
+    + 'ils arrivent après l\'enregistrement, et non pendant la frappe.';
+  return p;
+}
+
+/* -------------------------------------------------------- ventes intra -- */
+/* Une vente intra est un groupe vendu à un établissement : elle porte son
+   année, son segment et son nombre de sessions, indépendamment du calendrier
+   inter. D'où une liste de lignes plutôt qu'une matrice. */
+function ventesIntra(f) {
+  var zone = document.createElement('div');
+  var lignes = OF.table('Ventes_intra').filter(function (v) { return v.formation === f.id; })
+    .sort(function (a, b) {
+      var aa = OF.parId(OF.table('Annees'))[a.annee], bb = OF.parId(OF.table('Annees'))[b.annee];
+      return ((aa && aa.annee) || 0) - ((bb && bb.annee) || 0);
+    });
+
+  var colonnes = [
+    { col: 'annee', libelle: 'Année', type: 'ref', ref: 'Annees' },
+    { col: 'segment', libelle: 'Segment', type: 'ref', ref: 'Segments' },
+    { col: 'nb_sessions', libelle: 'Sessions', type: 'num' },
+    { col: 'participants_par_session', libelle: 'Participants', type: 'num' }
+  ];
+  if (OF.table('Ventes_intra').some(function (v) { return v.localisation !== undefined; })) {
+    colonnes.push({ col: 'localisation', libelle: 'Lieu', type: 'choice' });
+  }
+  if (OF.optionsRef('Categories_tarifaires').length) {
+    colonnes.push({ col: 'categorie', libelle: 'Catégorie', type: 'ref',
+      ref: 'Categories_tarifaires' });
+  }
+  colonnes.push({ col: 'recette', libelle: 'Recette', type: 'calcul', format: OF.eur });
+
+  var pilotee = OF.anneePilotee();
+  zone.appendChild(OF.sousTable({
+    table: 'Ventes_intra',
+    lignes: lignes,
+    colonnes: colonnes,
+    nouveau: { formation: f.id, annee: pilotee ? pilotee.id : null, nb_sessions: 1 },
+    relire: RELIRE, apres: rendreTout,
+    libelleAjout: 'Ajouter une vente intra',
+    vide: "Aucun groupe vendu en intra pour cette formation. L'intra se compte en sessions "
+      + "vendues à un établissement, pas en places ouvertes."
+  }));
+  return zone;
+}
+
+/* --------------------------------------------------------- validation -- */
+/* Deux états que le document connaît déjà, et qu'il vaut mieux poser ici,
+   au moment où l'on vient de relire la fiche, qu'en retournant dans la table. */
+function validation(f) {
+  var zone = document.createElement('div');
+  if (!OF.doc.metaOk) return zone;
+
+  var etat = document.createElement('p');
+  etat.className = 'note';
+  var parts = [];
+  if (OF.texte(f.etat_fiche)) parts.push('Définition : ' + f.etat_fiche.toLowerCase());
+  if (OF.texte(f.etat_projections)) parts.push('projections : ' + f.etat_projections.toLowerCase());
+  if (f.taux_completude || f.taux_completude === 0) {
+    parts.push('complétude ' + Math.round(100 * f.taux_completude) + ' %');
+  }
+  etat.textContent = parts.length ? ('Où en est cette fiche — ' + parts.join(', ') + '.') : '';
+  if (parts.length) zone.appendChild(etat);
+
+  if (OF.texte(f.alerte_validation)) {
+    var al = document.createElement('p');
+    al.className = 'alerte-bloc';
+    al.textContent = f.alerte_validation;
+    zone.appendChild(al);
+  }
+
+  var g = document.createElement('div');
+  g.className = 'grille';
+  var ignores = ajouterChamps(g, f, [
+    ['validation_definition', 'Validation de la définition'],
+    ['validation_projections', 'Validation des projections']
+  ]);
+  zone.appendChild(g);
+
+  var large = document.createElement('div');
+  large.className = 'grille';
+  large.style.gridTemplateColumns = '1fr';
+  large.style.marginTop = '14px';
+  ignores = ignores.concat(ajouterChamps(large, f, [
+    ['remarque_validation', 'Remarque de validation']
+  ], { multiligne: true, leger: true }));
+  zone.appendChild(large);
+  if (ignores.length) zone.appendChild(noteIgnores(ignores));
+  return zone;
+}
+
+/* ----------------------------------------- rafraîchissement sans re-rendu */
+function rafraichir() {
+  var f = formationCourante();
+  if (!f) return;
+  var fiche = OF.$('fiche'), segs = segmentsDe(f), actif = document.activeElement;
+
+  OF.anneesTriees().forEach(function (a, iAn) {
+    var tr = fiche.querySelector('tr[data-ligne="' + iAn + '"]');
+    if (!tr) return;
+    var lignes = projDe(a.id, f.id);
+    var sessions = lignes.reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0);
+    var recette = lignes.reduce(function (n, p) { return n + (p.recette || 0); }, 0);
+    var resultat = lignes.reduce(function (n, p) { return n + (p.resultat || 0); }, 0);
+    var capacite = sessions * (f.effectif_max || 0), places = 0;
+
+    tr.classList.toggle('remplie', !!sessions);
+    var chS = tr.querySelector('.champ[data-role="sessions"]');
+    if (chS && chS !== actif && !chS.disabled) chS.value = sessions || '';
+
+    segs.forEach(function (idSeg) {
+      var v = venteDe(a.id, f.id, idSeg);
+      places += (v && v.nb_places) || 0;
+      var ch = tr.querySelector('.champ[data-segment="' + idSeg + '"]');
+      if (!ch) return;
+      if (ch !== actif) ch.value = (v && v.nb_places) || '';
+      ch.classList.toggle('vide-attendu', !!sessions && !ch.value);
+    });
+
+    var poser = function (quoi, valeur, classe) {
+      var td = tr.querySelector('[data-calc="' + quoi + '"]');
+      if (!td) return;
+      td.textContent = valeur;
+      td.className = 'calcul' + (quoi === 'remplissage' ? ' calcule' : '') + (classe ? ' ' + classe : '');
+    };
+    poser('remplissage', capacite ? OF.pourcent(places, capacite) : '—');
+    poser('recette', recette ? OF.eur(recette) : '—');
+    poser('resultat', resultat ? OF.eur(resultat) : '—',
+      resultat > 0 ? 'positif' : (resultat < 0 ? 'negatif' : ''));
+  });
+
+  var toutes = OF.table('Projections').filter(function (p) { return p.formation === f.id; });
+  var poser = function (id, v, classe) {
+    var el = OF.$(id);
+    if (!el) return;
+    el.textContent = v;
+    el.className = classe || '';
+  };
+  poser('tot-sessions', OF.ent(toutes.reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0)));
+  poser('tot-recette', OF.eur(toutes.reduce(function (n, p) { return n + (p.recette || 0); }, 0)));
+  var res = toutes.reduce(function (n, p) { return n + (p.resultat || 0); }, 0);
+  poser('tot-resultat', OF.eur(res), res > 0 ? 'positif' : (res < 0 ? 'negatif' : ''));
+  var frais = formationCourante();
+  poser('tot-cout', frais && frais.cout_total ? OF.eur(frais.cout_total) : '—');
+
+  rendreRail();
+}
+
+function rendreTout() { rendreFiche(); rendreRail(); }
+
+/* ------------------------------------------------------------- montage -- */
+OF.$('recherche').addEventListener('input', function (ev) { filtre = ev.target.value; rendreRail(); });
+OF.$('prec').addEventListener('click', function () { voisine(-1); });
+OF.$('suiv').addEventListener('click', function () { voisine(1); });
+document.addEventListener('keydown', function (ev) {
+  var dansChamp = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (ev.key === '/' && !dansChamp) { ev.preventDefault(); OF.$('recherche').focus(); return; }
+  if (ev.altKey && ev.key === 'ArrowLeft') { ev.preventDefault(); voisine(-1); }
+  if (ev.altKey && ev.key === 'ArrowRight') { ev.preventDefault(); voisine(1); }
+});
+
+function demarrer() {
+  if (!OF.anneesTriees().length) { OF.echouer('Aucune année dans la table Annees.'); return; }
+  if (!OF.formationsTriees().length) {
+    OF.echouer('Aucune formation avec un intitulé dans la table Formations.');
+    return;
+  }
+  rendreRail();
+  rendreFiche();
+  if (grist.onRecord) {
+    grist.onRecord(function (rec) {      // suit la sélection si le widget est lié
+      if (rec && rec.id && OF.table('Formations').some(function (f) { return f.id === rec.id; })) {
+        ouvrir(rec.id);
+      }
+    });
+  }
+  rafraichir();
+}
+
+if (typeof window.TEST_SANS_DEMARRAGE === 'undefined') OF.initialiser(TABLES, demarrer);
+window.__fiche = { ouvrir: ouvrir, demarrer: function () { OF.initialiser(TABLES, demarrer); },
+  avancement: avancement, rendreFiche: rendreFiche, rafraichir: rafraichir };
+</script>
+</body>
+</html>

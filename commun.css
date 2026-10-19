@@ -1,0 +1,257 @@
+/* =========================================================================
+   Widgets Grist de l'organisme de formation du CHU — feuille commune.
+   Jetons, composants et états partagés par la fiche, la charge et le pilotage.
+   ========================================================================= */
+
+:root {
+  --papier: #f6f7f4;
+  --surface: #ffffff;
+  --encre: #16231d;
+  --sourd: #5c6b63;
+  --trait: #dce1da;
+  --trait-fort: #c3cbc1;
+  --fait: #0f6d5c;
+  --afaire: #a8661e;
+  --alerte: #b3261e;
+  --fait-pale: #e8f1ee;
+  --afaire-pale: #f7efe3;
+  --alerte-pale: #fdecec;
+  --ombre-focus: 0 0 0 3px rgba(15, 109, 92, .18);
+  --rail: 272px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --papier: #141a17;
+    --surface: #1b231f;
+    --encre: #e8ede9;
+    --sourd: #9aa8a0;
+    --trait: #2c3833;
+    --trait-fort: #3d4c45;
+    --fait: #4fb7a1;
+    --afaire: #d9a05a;
+    --alerte: #e98b84;
+    --fait-pale: #1d2f2a;
+    --afaire-pale: #2e2619;
+    --alerte-pale: #3a1f1d;
+    --ombre-focus: 0 0 0 3px rgba(79, 183, 161, .22);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font: 450 14px/1.45 "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  color: var(--encre);
+  background: var(--papier);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--fait); }
+
+/* ------------------------------------------------------------ ossature -- */
+#app { display: flex; flex-direction: column; height: 100%; }
+.barre {
+  display: flex; align-items: center; gap: 16px; flex: 0 0 auto;
+  padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--trait);
+}
+.corps { display: flex; flex: 1 1 auto; min-height: 0; }
+.rail {
+  flex: 0 0 var(--rail); min-width: 0; overflow-y: auto;
+  background: var(--surface); border-right: 1px solid var(--trait);
+}
+.fiche { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 0 26px 40px; }
+.fiche > h1, .fiche > .vide { margin-top: 22px; }
+.page { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
+.vide { color: var(--sourd); max-width: 50ch; }
+
+/* ------------------------------------------------------------ sommaire -- */
+/* Collant en haut de la fiche : où l'on est, où aller, et ce qui réclame
+   encore quelque chose. Le point ocre n'est pas un ornement, il dit qu'il
+   manque une information dans cette section. */
+.sommaire {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; gap: 2px; margin: 0 -26px 22px; padding: 0 26px;
+  /* le fond doit couvrir toute la largeur, le contenu passe dessous */
+  overflow-x: auto; scrollbar-width: thin;
+  background: var(--papier); border-bottom: 1px solid var(--trait);
+}
+.sommaire button {
+  position: relative; flex: 0 0 auto;
+  padding: 10px 12px 9px; font-size: 12.5px; color: var(--sourd); cursor: pointer;
+  background: none; border: 0; border-bottom: 2px solid transparent; white-space: nowrap;
+}
+.sommaire button:hover { color: var(--encre); }
+.sommaire button[aria-current="true"] { color: var(--encre); font-weight: 500;
+  border-bottom-color: var(--fait); }
+.sommaire button:focus-visible { outline: none; box-shadow: inset var(--ombre-focus); }
+.sommaire .manque {
+  display: inline-block; width: 5px; height: 5px; margin-left: 6px; vertical-align: 2px;
+  background: var(--afaire); border-radius: 50%;
+}
+.fiche section { scroll-margin-top: 52px; }
+
+/* --------------------------------------------------------------- texte -- */
+h1 { margin: 0 0 4px; font-size: 21px; font-weight: 600; line-height: 1.25; }
+h2 { margin: 30px 0 12px; font-size: 14px; font-weight: 600; letter-spacing: .005em; }
+h2:first-of-type { margin-top: 22px; }
+h3 { margin: 20px 0 8px; font-size: 13px; font-weight: 600; color: var(--sourd); }
+p { margin: 0 0 10px; }
+.sous { margin: 0 0 20px; color: var(--sourd); font-size: 13px; max-width: 72ch; }
+.note { font-size: 12.5px; color: var(--sourd); max-width: 76ch; }
+.chiffre { font-variant-numeric: tabular-nums; }
+.positif { color: var(--fait); }
+.negatif { color: var(--alerte); }
+
+/* ------------------------------------------------------------ contrôles -- */
+.recherche {
+  flex: 0 1 240px; min-width: 110px; padding: 7px 10px;
+  background: var(--papier); border: 1px solid var(--trait); border-radius: 3px;
+}
+.recherche:focus { outline: none; border-color: var(--fait); box-shadow: var(--ombre-focus); }
+.outil {
+  padding: 6px 11px; background: var(--papier); cursor: pointer;
+  border: 1px solid var(--trait); border-radius: 3px;
+}
+.outil:hover { border-color: var(--trait-fort); background: var(--surface); }
+.outil:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
+.outil:disabled { opacity: .4; cursor: default; }
+.outil.attention { background: var(--afaire-pale); border-color: var(--afaire); color: var(--afaire); }
+.nav { display: flex; gap: 4px; flex: 0 0 auto; }
+
+.champ {
+  width: 78px; padding: 6px 8px; text-align: right;
+  font-variant-numeric: tabular-nums; background: transparent;
+  border: 1px solid transparent; border-bottom-color: var(--trait-fort); border-radius: 2px;
+}
+.champ::placeholder { color: var(--trait-fort); }
+.champ:hover { border-bottom-color: var(--sourd); }
+.champ:focus { outline: none; background: var(--surface);
+  border-color: var(--fait); box-shadow: var(--ombre-focus); }
+.champ:disabled { color: var(--sourd); border-bottom-style: dotted; }
+.champ.vide-attendu { background: var(--afaire-pale); border-bottom-color: var(--afaire); }
+.champ.erreur { background: var(--alerte-pale); border-color: var(--alerte); }
+
+/* ------------------------------------------------- formulaire de fiche -- */
+.grille { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px 22px; align-items: start; }
+.bloc { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bloc > label { font-size: 12px; color: var(--sourd); }
+.saisie {
+  width: 100%; padding: 7px 9px; background: var(--surface);
+  border: 1px solid var(--trait); border-radius: 3px;
+}
+.saisie:hover { border-color: var(--trait-fort); }
+.saisie:focus { outline: none; border-color: var(--fait); box-shadow: var(--ombre-focus); }
+textarea.saisie { min-height: 84px; resize: vertical; line-height: 1.5; }
+.saisie.manquant { border-color: var(--afaire); background: var(--afaire-pale); }
+
+/* listes de références, en étiquettes cliquables */
+.etiquettes { display: flex; flex-wrap: wrap; gap: 5px; }
+.etiq {
+  padding: 4px 9px; font-size: 12.5px; cursor: pointer;
+  background: var(--surface); color: var(--sourd);
+  border: 1px solid var(--trait); border-radius: 12px;
+}
+.etiq:hover { border-color: var(--trait-fort); }
+.etiq:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
+.etiq[aria-pressed="true"] { background: var(--fait-pale); color: var(--fait);
+  border-color: var(--fait); font-weight: 500; }
+
+/* ------------------------------------------------------------ tableaux -- */
+.matrice { border-collapse: collapse; }
+.matrice th {
+  padding: 0 10px 7px; font-size: 11.5px; font-weight: 500; color: var(--sourd);
+  text-align: right; white-space: nowrap; border-bottom: 1px solid var(--trait);
+}
+.matrice th.gauche, .matrice td.gauche { text-align: left; }
+.matrice th.gauche { padding-left: 0; }
+.matrice td { padding: 3px 10px; border-bottom: 1px solid var(--trait); }
+.matrice tr:last-child td { border-bottom: 0; }
+.matrice tbody tr:hover td { background: var(--papier); }
+.matrice th.calcule, .matrice td.calcule { border-left: 1px solid var(--trait); padding-left: 16px; }
+.calcul { font-size: 12.5px; color: var(--sourd); text-align: right; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.an { padding-left: 0 !important; font-size: 19px; font-weight: 400; color: var(--sourd);
+  font-variant-numeric: tabular-nums; }
+.matrice tr.remplie .an { color: var(--encre); }
+.libelle { font-size: 13px; }
+.second { font-size: 12px; color: var(--sourd); }
+
+/* ---------------------------------------------------------------- rail -- */
+.item {
+  display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 8px;
+  width: 100%; text-align: left; padding: 9px 14px 9px 12px; cursor: pointer;
+  background: none; border: 0; border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--trait);
+}
+.item:hover { background: var(--papier); }
+.item[aria-current="true"] { background: var(--papier); border-left-color: var(--fait); }
+.item:focus-visible { outline: none; box-shadow: inset var(--ombre-focus); }
+.item-nom { font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
+.item-etat { font-size: 11.5px; color: var(--sourd); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.rail-vide { padding: 18px 16px; font-size: 13px; color: var(--sourd); }
+
+/* --------------------------------------------------------------- états -- */
+.pastille { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 5px; vertical-align: 1px; }
+.p-fait { background: var(--fait); }
+.p-partiel { background: var(--afaire); }
+.p-vide { background: var(--trait-fort); }
+.p-alerte { background: var(--alerte); }
+.avance { display: flex; gap: 14px; flex: 1 1 auto; font-size: 12.5px; color: var(--sourd); }
+.avance b { color: var(--encre); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.alerte-bloc { margin: 0 0 18px; padding: 11px 13px; font-size: 13px;
+  background: var(--afaire-pale); border-left: 3px solid var(--afaire); }
+.alerte-bloc.grave { background: var(--alerte-pale); border-left-color: var(--alerte); }
+
+.etat-sauve {
+  position: fixed; right: 14px; bottom: 12px; padding: 5px 10px; font-size: 12px;
+  background: var(--surface); color: var(--sourd);
+  border: 1px solid var(--trait); border-radius: 3px;
+  opacity: 0; transition: opacity .18s ease; pointer-events: none;
+}
+.etat-sauve.visible { opacity: 1; }
+.etat-sauve.rate { color: var(--alerte); border-color: var(--alerte); }
+
+/* ------------------------------------------------------------- bilans -- */
+.bilan { display: flex; gap: 34px; flex-wrap: wrap; margin: 0;
+  padding-top: 18px; border-top: 1px solid var(--trait); }
+.bilan div { display: flex; flex-direction: column-reverse; gap: 2px; }
+.bilan dt { font-size: 12px; color: var(--sourd); }
+.bilan dd { margin: 0; font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.indicateurs { display: grid; gap: 1px; background: var(--trait);
+  border: 1px solid var(--trait); margin-bottom: 26px; }
+.ind { display: grid; grid-template-columns: 24px 1fr auto auto; gap: 12px;
+  align-items: baseline; padding: 11px 14px; background: var(--surface); }
+.ind-feu { font-size: 13px; line-height: 1; }
+.ind-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ind-cible { font-size: 12px; color: var(--sourd); white-space: nowrap; }
+
+.aide { margin-top: 30px; padding-top: 16px; font-size: 12.5px; color: var(--sourd);
+  max-width: 78ch; border-top: 1px solid var(--trait); }
+kbd { padding: 1px 5px; font: inherit; font-size: 11.5px;
+  background: var(--papier); border: 1px solid var(--trait); border-radius: 3px; }
+
+.lieu { padding: 5px 7px; font-size: 12px; color: var(--sourd); cursor: pointer;
+  background: transparent; border: 1px solid var(--trait); border-radius: 3px; }
+.lieu:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
+.doublon { font-size: 11.5px; color: var(--afaire); }
+.outils { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 18px 0 26px; font-size: 13px; color: var(--sourd); }
+.coef { width: 62px; padding: 5px 7px; text-align: right; font-variant-numeric: tabular-nums;
+  background: var(--surface); border: 1px solid var(--trait); border-radius: 3px; }
+.coef:focus { outline: none; border-color: var(--fait); box-shadow: var(--ombre-focus); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (max-width: 760px) {
+  .corps { flex-direction: column; }
+  .rail { flex: 0 0 auto; max-height: 32vh; border-right: 0; border-bottom: 1px solid var(--trait); }
+  .page { padding: 18px 14px 32px; }
+  .fiche { padding: 0 14px 32px; }
+  .fiche > h1, .fiche > .vide { margin-top: 18px; }
+  .barre { flex-wrap: wrap; gap: 8px; }
+}

@@ -1,0 +1,101 @@
+# Widgets Grist — organisme de formation du CHU de Rennes
+
+Trois widgets personnalisés pour le document de projection des ventes. Fichiers statiques,
+sans dépendance ni build : on dépose le dossier sur une adresse en https et on colle les URL
+dans Grist.
+
+| Fichier | Ce qu'il fait |
+|---|---|
+| `index.html` | Page catalogue, qui affiche l'URL à coller pour chaque widget |
+| `fiche.html` | Tout ce qui concerne une formation : définition, public, ressources, coût, projections, ventes intra, validation |
+| `charge.html` | Vivier d'intervenants, profil par profil, et besoin de recrutement |
+| `pilotage.html` | Les deux tableaux de bord : recrutement et projection pluriannuelle |
+| `commun.css` | Jetons visuels et composants partagés |
+| `commun.js` | Plomberie Grist, métadonnées de colonnes, éditeurs, écriture différée |
+
+## Mise en place
+
+1. Déposer le dossier sur GitLab Pages, GitHub Pages ou votre serveur.
+2. Dans le document Grist : **Ajouter → Page** (ou Widget) → **Personnalisé**, coller l'URL.
+3. Régler sur **Accès complet au document**.
+
+L'URL de l'API plugin (`https://grist.numerique.gouv.fr/grist-plugin-api.js`) figure en tête
+de chaque fichier HTML. C'est la seule ligne à changer si le document déménage.
+
+## Principes de construction
+
+**Une seule source de vérité.** Aucune formule du document n'est réécrite en JavaScript.
+Recettes, coûts, remplissage, interventions requises, besoin de recrutement : tout est lu
+dans les colonnes formules. Les widgets affichent et saisissent, ils ne calculent pas. C'est
+pour cela que les valeurs calculées arrivent *après* l'enregistrement et non pendant la
+frappe — un délai assumé contre un risque de divergence écarté.
+
+**Rien de ce que le document sait n'est redemandé.** Les segments visés viennent de la
+formation, la catégorie tarifaire du segment quand `Segments_categories` n'en autorise
+qu'une, les profils d'intervenants de `Intervenants_formation`, les choix des colonnes
+`Choice` de leurs métadonnées.
+
+**Ne jamais écrire une valeur du mauvais type.** Les éditeurs sont construits d'après le type
+réel de chaque colonne, lu dans `_grist_Tables_column`. Si ces métadonnées ne sont pas
+lisibles, la fiche passe en lecture seule plutôt que de risquer d'écrire du texte dans une
+colonne de référence.
+
+**Ne jamais remplacer une saisie sans le dire.** La reprise d'une année sur les suivantes
+compte les valeurs qu'elle écraserait et demande confirmation en les nommant.
+
+**Le curseur ne saute pas.** Après enregistrement, seules les valeurs calculées sont
+rafraîchies ; le champ en cours de frappe garde le curseur et son contenu.
+
+## Le sommaire de la fiche
+
+La fiche est longue : un sommaire collant en haut permet de sauter directement aux
+projections ou au coût, repère la section en cours de lecture, et marque d'un point ocre les
+sections où il manque encore une information — définition incomplète selon le document,
+aucun segment visé, intervenants ou salles non décrits, places manquantes sur une année qui
+porte des sessions.
+
+## Raccourcis clavier
+
+| Touche | Effet |
+|---|---|
+| `↑` `↓` | Année précédente ou suivante, dans la même colonne |
+| `Entrée` | Descend d'une ligne |
+| `Échap` | Annule la frappe en cours |
+| `Alt` + `←` `→` | Formation précédente ou suivante |
+| `/` | Place le curseur dans la recherche |
+
+## Tables lues et écrites
+
+Lues : `Annees`, `Formations`, `Projections`, `Ventes_inter`, `Ventes_intra`, `Segments`,
+`Segments_categories`, `Domaines`, `Typologies`, `Gestionnaire`, `Metiers`, `Enjeux`,
+`Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Charge`, `Parametres`.
+
+Écrites : `Formations` (définition), `Projections` et `Ventes_inter` (sessions et places),
+`Intervenants_formation` (profils mobilisés), `Vivier` (vivier et départs). Le widget de
+pilotage est en lecture seule.
+
+## Ce que couvre la fiche formation
+
+Sept sections, dans l'ordre où l'on décrit une formation :
+
+1. **Définition** — code, intitulé, domaine, typologie, durée, effectif, modalité, statut,
+   gestionnaire, programme, commentaire.
+2. **Public visé** — segments de marché, métiers, enjeux, obligations réglementaires, en
+   étiquettes cliquables.
+3. **Ressources mobilisées par session** — qui anime (profil, heures, nombre) et dans quelle
+   salle (type, nombre, jours). Ce sont les deux entrées du coût.
+4. **Coût de revient d'une session** — animation, support et gestion, total, par jour, par
+   heure, et les deux tarifs planchers. Toutes ces valeurs sont des colonnes formules du
+   document, affichées pendant qu'on décrit les ressources pour que la construction du coût
+   soit lisible.
+5. **Projections** — sessions et places vendues par segment, année par année, avec reprise
+   d'une année sur les suivantes.
+6. **Ventes intra** — les groupes vendus à un établissement, qui se comptent en sessions et
+   non en places ouvertes.
+7. **Validation** — l'état que le document calcule (complétude, état des projections) et les
+   deux champs de validation à poser.
+
+## Ce qui n'y est pas
+
+Les parcours et la grille tarifaire restent dans leurs tables : ce sont des référentiels, pas
+de la saisie par formation.
