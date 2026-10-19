@@ -19,8 +19,13 @@ dans Grist.
 2. Dans le document Grist : **Ajouter → Page** (ou Widget) → **Personnalisé**, coller l'URL.
 3. Régler sur **Accès complet au document**.
 
-L'URL de l'API plugin (`https://grist.numerique.gouv.fr/grist-plugin-api.js`) figure en tête
-de chaque fichier HTML. C'est la seule ligne à changer si le document déménage.
+L'API Grist est chargée automatiquement depuis l'instance qui embarque le widget — déduite de
+la page parente, avec `https://grist.numerique.gouv.fr` en repli. Rien à configurer, et rien à
+changer si le document déménage d'instance.
+
+Si quelque chose cloche, le widget n'affiche pas une page vide : il indique ce qui a échoué,
+l'instance détectée, s'il est bien dans un cadre et si l'API a été chargée. C'est ce qu'il faut
+lire en premier.
 
 ## Principes de construction
 

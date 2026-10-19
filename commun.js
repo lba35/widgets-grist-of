@@ -67,10 +67,21 @@ var OF = (function () {
   /* --------------------------------------------------------- document -- */
   var doc = { tables: {}, colonnes: {}, metaOk: false };
 
+  /* Une table absente du document donne une liste vide, c'est normal : tous
+     les widgets ne s'en servent pas. En revanche, si TOUTES échouent, le
+     problème n'est pas la table mais l'accès — et il faut le dire. */
   function charger(noms) {
+    var echecs = [];
     return Promise.all(noms.map(function (n) {
-      return grist.docApi.fetchTable(n).then(enLignes).catch(function () { return []; });
+      return grist.docApi.fetchTable(n).then(enLignes).catch(function (e) {
+        echecs.push(n + ' (' + (e && e.message ? e.message : e) + ')');
+        return [];
+      });
     })).then(function (res) {
+      if (noms.length && echecs.length === noms.length) {
+        throw new Error('Aucune table n\'a pu être lue : ' + echecs[0]
+          + '. C\'est en général que le widget n\'a pas l\'accès complet au document.');
+      }
       noms.forEach(function (n, i) { doc.tables[n] = res[i]; });
       return doc.tables;
     });
@@ -411,6 +422,66 @@ var OF = (function () {
     return el;
   }
 
+  /* ------------------------------------------- chargement de l'API Grist */
+  /* L'adresse de l'instance n'est pas écrite en dur : on la déduit de la page
+     qui nous embarque. Si le widget déménage d'instance, rien à modifier. */
+  var INSTANCE_PAR_DEFAUT = 'https://grist.numerique.gouv.fr';
+
+  function origineGrist() {
+    try {
+      if (window.location.ancestorOrigins && window.location.ancestorOrigins.length) {
+        return window.location.ancestorOrigins[0];
+      }
+    } catch (e) { /* non géré par tous les navigateurs */ }
+    try {
+      if (document.referrer) return new URL(document.referrer).origin;
+    } catch (e) { /* référent masqué */ }
+    return INSTANCE_PAR_DEFAUT;
+  }
+
+  function chargerApi() {
+    if (typeof grist !== 'undefined') return Promise.resolve();
+    var url = origineGrist() + '/grist-plugin-api.js';
+    return new Promise(function (ok, ko) {
+      var s = document.createElement('script');
+      s.src = url;
+      s.onload = function () {
+        if (typeof grist !== 'undefined') ok();
+        else ko(new Error('Le script ' + url + ' s\'est chargé, mais il ne fournit pas l\'objet '
+          + 'grist attendu.'));
+      };
+      s.onerror = function () {
+        ko(new Error('Impossible de charger ' + url + '. Soit cette page n\'est pas ouverte '
+          + 'comme widget dans Grist, soit l\'adresse de l\'instance n\'est pas celle-là.'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  /* Un écran qui dit ce qui s'est passé, plutôt qu'une page vide. */
+  function diagnostic(erreur) {
+    var faits = [
+      ['Page embarquée dans', (window.top !== window.self) ? 'un cadre' : 'aucun cadre : '
+        + 'ouverte directement dans le navigateur'],
+      ['Instance détectée', origineGrist()],
+      ['API Grist', typeof grist !== 'undefined' ? 'chargée' : 'absente'],
+      ['Adresse de cette page', location.href]
+    ];
+    var cible = $('page') || $('fiche') || document.body;
+    cible.innerHTML = '<div class="vide">'
+      + '<p><strong>' + echappe(erreur && erreur.message ? erreur.message : String(erreur))
+      + '</strong></p>'
+      + '<p>Si vous lisez ceci dans Grist : vérifiez que le widget a bien reçu l\'accès complet '
+      + 'au document — bouton à trois points du widget, « Options du widget », section '
+      + 'PERSONNALISÉ, puis confirmer la demande d\'accès.</p>'
+      + '<table class="matrice" style="margin-top:16px">' + faits.map(function (f) {
+        return '<tr><td class="gauche second">' + echappe(f[0]) + '</td>'
+          + '<td class="gauche libelle">' + echappe(f[1]) + '</td></tr>';
+      }).join('') + '</table></div>';
+    var app = $('app');
+    if (app) app.setAttribute('aria-busy', 'false');
+  }
+
   /* ------------------------------------------------------------ départ -- */
   function echouer(message) {
     var cible = $('page') || $('fiche') || document.body;
@@ -423,22 +494,18 @@ var OF = (function () {
      métadonnées, puis appel de `demarrer`. Les erreurs sont affichées
      plutôt que laissées dans la console. */
   function initialiser(tables, demarrer) {
-    if (typeof grist === 'undefined') {
-      echouer('Cette page doit être ouverte comme widget personnalisé dans un document Grist.');
-      return;
-    }
-    grist.ready({ requiredAccess: 'full' });
-    chargerColonnes()
+    chargerApi()
+      .then(function () {
+        grist.ready({ requiredAccess: 'full' });
+        return chargerColonnes();
+      })
       .then(function () { return charger(tables); })
       .then(function () {
         var app = $('app');
         if (app) app.setAttribute('aria-busy', 'false');
         demarrer();
       })
-      .catch(function (e) {
-        echouer('Lecture du document impossible : ' + (e && e.message ? e.message : e)
-          + ' — vérifiez que le widget a bien l\'accès complet au document.');
-      });
+      .catch(diagnostic);
   }
 
   /* L'année de travail : celle qui porte annee_pilotee, sinon la première. */
