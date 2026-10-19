@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=6">
+<link rel="stylesheet" href="commun.css?v=7">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=6"></script>
+<script src="commun.js?v=7"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v6';
+var VERSION = 'v7';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -105,7 +105,16 @@ function basesVente() {
   });
 }
 function estGroupe(base) { return /groupe/i.test(OF.texte(base)); }
-function uniteCourte(base) { return estGroupe(base) ? 'gr.' : 'pl.'; }
+/* « gr. » suffit tant qu'il n'y a qu'un tarif au groupe. S'il y en a deux, les
+   confondre sous la même étiquette ferait croire à deux lignes identiques qui
+   ne se facturent pas pareil : on ajoute alors de quoi les distinguer. */
+function uniteCourte(base) {
+  var racine = estGroupe(base) ? 'gr.' : 'pl.';
+  var memeUnite = basesVente().filter(function (b) { return estGroupe(b) === estGroupe(base); });
+  if (memeUnite.length < 2) return racine;
+  var mots = OF.texte(base).trim().split(/\s+/);
+  return racine + ' ' + mots[mots.length - 1].toLowerCase();
+}
 function colonneQuantite(v) {
   return estGroupe(v && v.base) ? 'nb_groupes' : 'nb_places';
 }
@@ -827,9 +836,88 @@ function projections(f) {
   t.appendChild(corps);
   zone.appendChild(t);
   zone.appendChild(noteUnites(segs));
+  zone.appendChild(detailVentes(f, annees));
   zone.appendChild(outilsReprise(f, annees));
   zone.appendChild(bilan(f));
   return zone;
+}
+
+/* Toutes les lignes qui alimentent la recette de l'année, inter et intra.
+   La grille au-dessus ne montre qu'une case par segment ; dès qu'une année
+   porte autre chose — une vente intra, une seconde ligne sur le même segment,
+   un autre tarif — c'est ici que la différence se voit, au lieu de rester une
+   énigme entre deux années d'apparence identique. */
+function detailVentes(f, annees) {
+  var d = document.createElement('details');
+  d.className = 'chiffres';
+  d.style.marginTop = '14px';
+
+  var lignes = [];
+  annees.forEach(function (a) {
+    OF.table('Ventes_inter').filter(function (v) {
+      return v.formation === f.id && v.annee === a.id;
+    }).forEach(function (v) {
+      var col = colonneQuantite(v);
+      lignes.push([String(a.annee), 'inter', nomSegment(v.segment),
+        OF.texte(v.base) || '—',
+        v.categorie ? nomCategorie(v.categorie) : '—',
+        col === 'nb_groupes'
+          ? OF.plur(v.nb_groupes, 'groupe')
+          : OF.plur(v.nb_places, 'place'),
+        v.recette ? OF.eur(v.recette) : '—']);
+    });
+    OF.table('Ventes_intra').filter(function (v) {
+      return v.formation === f.id && v.annee === a.id;
+    }).forEach(function (v) {
+      lignes.push([String(a.annee), 'intra', nomSegment(v.segment),
+        OF.texte(v.base) || '—',
+        v.categorie ? nomCategorie(v.categorie) : '—',
+        OF.plur(v.nb_sessions, 'session')
+          + (v.participants_par_session ? ' × ' + OF.ent(v.participants_par_session) : ''),
+        v.recette ? OF.eur(v.recette) : '—']);
+    });
+  });
+
+  var s = document.createElement('summary');
+  s.textContent = lignes.length
+    ? 'Le détail des ' + OF.plur(lignes.length, 'ligne') + ' de vente'
+    : 'Le détail des lignes de vente';
+  d.appendChild(s);
+
+  if (!lignes.length) {
+    var vide = document.createElement('p');
+    vide.className = 'note';
+    vide.textContent = 'Aucune ligne de vente pour cette formation.';
+    d.appendChild(vide);
+    return d;
+  }
+
+  var cadre = document.createElement('div');
+  cadre.className = 'defilant';
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr>'
+    + ['Année', 'Vente', 'Segment', 'Base de facturation', 'Tarif', 'Quantité', 'Recette']
+      .map(function (h, i) {
+        return '<th class="' + (i === 6 ? '' : 'gauche') + '">' + OF.echappe(h) + '</th>';
+      }).join('')
+    + '</tr></thead><tbody>' + lignes.map(function (L) {
+      return '<tr>' + L.map(function (c, i) {
+        return '<td class="' + (i === 6 ? 'calcul' : 'gauche libelle') + '">'
+          + OF.echappe(c) + '</td>';
+      }).join('') + '</tr>';
+    }).join('') + '</tbody>';
+  cadre.appendChild(t);
+  d.appendChild(cadre);
+
+  var n = document.createElement('p');
+  n.className = 'note';
+  n.style.marginTop = '10px';
+  n.textContent = 'Deux années qui portent les mêmes nombres dans la grille mais pas la même '
+    + 'recette ont forcément une ligne de plus, un autre tarif ou une autre base : elle est '
+    + 'dans ce tableau.';
+  d.appendChild(n);
+  return d;
 }
 
 /* Ce que disent les pastilles, et ce qu'il manque dans le document pour
