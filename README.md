@@ -12,6 +12,7 @@ dans Grist.
 | `pilotage.html` | Les deux tableaux de bord : recrutement et projection pluriannuelle |
 | `commun.css` | Jetons visuels et composants partagés |
 | `commun.js` | Plomberie Grist, métadonnées de colonnes, éditeurs, écriture différée |
+| `graphes.js` | Les graphiques du pilotage, dessinés en SVG, sans bibliothèque |
 
 ## Mise en place
 
@@ -49,7 +50,45 @@ colonne de référence.
 compte les valeurs qu'elle écraserait et demande confirmation en les nommant.
 
 **Le curseur ne saute pas.** Après enregistrement, seules les valeurs calculées sont
-rafraîchies ; le champ en cours de frappe garde le curseur et son contenu.
+rafraîchies ; le champ en cours de frappe garde le curseur et son contenu. Dans le tableau des
+objectifs, où l'écran entier se redessine, la valeur part à la sortie du champ et le curseur
+est rendu à la case qu'on venait de quitter.
+
+**Aucune bibliothèque externe.** Les graphiques sont du SVG écrit à la main : une dépendance
+de moins à charger depuis le réseau du CHU, et rien qui puisse disparaître d'un CDN.
+
+## Les graphiques
+
+Quatre figures dans l'onglet Projection, et une dans l'onglet Recrutement :
+
+| Figure | Ce qu'elle montre |
+|---|---|
+| Recettes projetées par année | Les recettes en barres, l'objectif de l'année en trait pointillé sur la même échelle |
+| Résultat sur coûts directs | Une barre par année, au-dessus ou au-dessous de la ligne de zéro |
+| Recettes par domaine | La recette de chaque année décomposée par domaine, cinq teintes au plus |
+| Remplissage des sessions inter | La courbe du taux de remplissage, sur une échelle de 0 à 100 % |
+| Intervenants à recruter | Le besoin de recrutement par année, empilé par profil |
+
+Les règles tenues, qui ne sont pas des questions de goût : jamais deux échelles sur un même
+graphique ; une série garde sa couleur quand on filtre, les teintes sont attribuées dans un
+ordre fixe et jamais recyclées ; au-delà de cinq domaines, les plus petits se regroupent en
+« Autres » plutôt que de recevoir une sixième teinte indiscernable ; les cinq teintes ont été
+vérifiées deux à deux pour les trois daltonismes et pour la vision normale, sur le fond clair
+puis sur le fond sombre ; les valeurs sont écrites en couleur de texte, jamais en couleur de
+série ; une légende apparaît dès qu'il y a deux séries et nomme chaque série avec son chiffre
+de l'année pilotée, pour que l'identité ne repose jamais sur la seule couleur ; et chaque
+figure est doublée d'un tableau « Les chiffres », qui se lit sans voir le dessin.
+
+Le mode sombre n'est pas un simple inversement : chaque teinte y est reprise un cran plus loin
+dans sa rampe, puis revérifiée sur le fond sombre. Les deux jeux sont dans `commun.css`.
+
+## Les objectifs
+
+Un objectif ne se calcule pas, il se décide : c'est la seule chose que le pilotage écrit, dans
+la table `Annees`, à côté du réalisé qui lui fait face. Quatre objectifs sont prévus — recettes,
+résultat, sessions, heures stagiaires — et chacun n'apparaît que si la colonne de réalisé
+correspondante existe. Si la colonne d'objectif manque, un bouton la crée dans le document,
+en numérique, avec son libellé.
 
 ## Le sommaire de la fiche
 
@@ -76,8 +115,8 @@ Lues : `Annees`, `Formations`, `Projections`, `Ventes_inter`, `Ventes_intra`, `S
 `Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Charge`, `Parametres`.
 
 Écrites : `Formations` (définition), `Projections` et `Ventes_inter` (sessions et places),
-`Intervenants_formation` (profils mobilisés), `Vivier` (vivier et départs). Le widget de
-pilotage est en lecture seule.
+`Intervenants_formation` (profils mobilisés), `Vivier` (vivier et départs), `Annees`
+(objectifs seulement). Tout le reste de ce que montre le pilotage est en lecture seule.
 
 ## Ce que couvre la fiche formation
 

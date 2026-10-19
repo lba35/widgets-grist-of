@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=3">
+<link rel="stylesheet" href="commun.css?v=6">
 <style>
   body { overflow-y: auto; }
   .enveloppe { max-width: 74ch; margin: 0 auto; padding: 48px 24px 72px; }
@@ -55,8 +55,10 @@
     <a class="carte" href="pilotage.html">
       <h2>Pilotage</h2>
       <p>Les deux tableaux de bord. Recrutement : indicateurs, couverture par profil,
-        priorités classées, dépendances à une personne, et ce qui bloque encore la décision.
-        Projection : la trajectoire pluriannuelle et la part de chaque domaine.</p>
+        priorités classées, dépendances à une personne, et quand recruter de quel profil.
+        Projection : les recettes face aux objectifs, le résultat, la composition par domaine
+        et le remplissage, en graphiques et en chiffres — et les objectifs à fixer, année
+        par année.</p>
       <span class="url" data-url="pilotage.html"></span>
     </a>
   </div>
@@ -74,9 +76,16 @@
   </ol>
 
   <h2>Si l'instance change</h2>
-  <p class="note">Chaque widget charge l'API plugin depuis
-    <code>grist.numerique.gouv.fr</code>, en tête de fichier. C'est la seule ligne à modifier
-    si le document déménage.</p>
+  <p class="note">Rien à faire : l'API plugin est chargée depuis l'instance qui embarque le
+    widget, déduite de la page parente, avec <code>grist.numerique.gouv.fr</code> puis
+    <code>docs.getgrist.com</code> en repli. Aucune adresse n'est écrite en dur.</p>
+
+  <h2>Rien n'est recalculé ici</h2>
+  <p class="note">Recettes, coûts, remplissage, besoin de recrutement : tout est lu dans les
+    colonnes formules du document, y compris ce que les graphiques dessinent. Les widgets
+    affichent et saisissent, ils ne calculent pas — l'écran et le document ne peuvent pas
+    diverger. Les objectifs sont la seule exception : ils ne se déduisent de rien, ils se
+    décident, et se saisissent dans l'onglet Projection du pilotage.</p>
 </div>
 <script>
   /* l'URL à coller dans Grist, celle du widget tel qu'il est servi ici */

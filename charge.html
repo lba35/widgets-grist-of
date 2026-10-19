@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=3">
+<link rel="stylesheet" href="commun.css?v=6">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -28,7 +28,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=3"></script>
+<script src="commun.js?v=6"></script>
 <script>
 /* =========================================================================
    Plan de charge — le vivier d'intervenants, profil par profil.
@@ -40,6 +40,9 @@
    lu dans les colonnes formules de la table Vivier.
    ========================================================================= */
 'use strict';
+
+/* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
+var VERSION = 'v6';
 
 var TABLES = ['Annees', 'Formations', 'Intervenants', 'Intervenants_formation',
   'Vivier', 'Projections', 'Ventes_intra', 'Parametres', 'Gestionnaire'];
@@ -138,7 +141,9 @@ function rendreAvance() {
     '<span><b>' + OF.ent(recruter) + '</b> à recruter</span>'
     + '<span><b>' + OF.ent(candidats) + '</b> candidats à chercher</span>'
     + '<span><span class="pastille p-alerte"></span><b>' + fragiles + '</b> sous le seuil</span>'
-    + '<span><span class="pastille p-partiel"></span><b>' + vides + '</b> vivier non saisi</span>';
+    + '<span><span class="pastille p-partiel"></span><b>' + vides + '</b> vivier non saisi</span>'
+    + '<span class="version" title="Version de charge.html actuellement servie">'
+      + VERSION + '</span>';
 }
 
 /* ---------------------------------------------------------------- page -- */
