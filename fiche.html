@@ -39,6 +39,11 @@
    ========================================================================= */
 'use strict';
 
+/* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
+   l'ancien numéro : on sait tout de suite si le fichier déposé est bien
+   celui qui tourne, sans avoir à lire le code source. */
+var VERSION = 'v6';
+
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
   'Gestionnaire', 'Metiers', 'Enjeux', 'Obligations', 'Intervenants', 'Intervenants_formation',
@@ -326,7 +331,11 @@ function rendreAvance() {
     '<span><span class="pastille p-fait"></span><b>' + n.fait + '</b> complètes</span>'
     + '<span><span class="pastille p-partiel"></span><b>' + (n.partiel + n['sans-segment'])
       + '</b> à compléter</span>'
-    + '<span><span class="pastille p-vide"></span><b>' + n.vide + '</b> sans session</span>';
+    + '<span><span class="pastille p-vide"></span><b>' + n.vide + '</b> sans session</span>'
+    /* le numéro de version du fichier servi : si le navigateur ressort une
+       vieille page de son cache, il se lit ici d'un coup d'œil */
+    + '<span class="version" title="Version de fiche.html actuellement servie">'
+      + VERSION + '</span>';
 }
 
 /* --------------------------------------------------------------- fiche -- */
