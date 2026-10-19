@@ -82,6 +82,24 @@ figure est doublée d'un tableau « Les chiffres », qui se lit sans voir le des
 Le mode sombre n'est pas un simple inversement : chaque teinte y est reprise un cran plus loin
 dans sa rampe, puis revérifiée sur le fond sombre. Les deux jeux sont dans `commun.css`.
 
+## Les ventes au groupe
+
+Une ligne de `Ventes_inter` facturée « Groupe / jour » porte un nombre de groupes. Pour que ces
+groupes occupent des sièges, le document a besoin d'une taille de groupe : la colonne
+`participants_par_groupe`, symétrique de `participants_par_session` sur `Ventes_intra`, et
+d'une colonne `places` qui vaut `nb_groupes × participants_par_groupe` au groupe et `nb_places`
+sinon. Le script `groupes_inter_grist.js` les crée et bascule tous les compteurs de places du
+document sur `places`. Sans lui, un groupe compte zéro siège et le remplissage est faux.
+
+Dans la fiche, une ligne au groupe affiche alors deux champs — `1 × 8` — et le second prend
+l'effectif maximum de la formation quand on le laisse vide, comme le fait déjà l'intra.
+
+La colonne `alerte` que le document calcule sur chaque ligne de vente est reprise sous la case
+concernée et en toutes lettres dans le détail : catégorie tarifaire à choisir, tarif introuvable,
+places et groupes saisis sur la même ligne. Et quand plusieurs lignes de vente portent la même
+année et le même segment, la case le dit et passe en lecture seule plutôt que de n'en montrer
+qu'une et de laisser les totaux paraître faux.
+
 ## Les objectifs
 
 Un objectif ne se calcule pas, il se décide : c'est la seule chose que le pilotage écrit, dans

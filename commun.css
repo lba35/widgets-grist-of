@@ -274,6 +274,16 @@ textarea.saisie { min-height: 84px; resize: vertical; line-height: 1.5; }
 kbd { padding: 1px 5px; font: inherit; font-size: 11.5px;
   background: var(--papier); border: 1px solid var(--trait); border-radius: 3px; }
 
+/* « 1 groupe de 8 » : le nombre, puis la taille du groupe */
+.quantite { display: flex; align-items: baseline; gap: 2px; }
+.quantite .fois { font-size: 11px; color: var(--trait-fort); }
+.champ.taille { width: 46px; }
+
+/* ce que le document reproche à la ligne, ou les lignes en double */
+.ennui { margin-top: 1px; font-size: 11px; line-height: 1.35; color: var(--afaire);
+  max-width: 150px; }
+.alerte-texte { color: var(--afaire); }
+
 /* sous une case de places : ce que le nombre compte, et à quel tarif */
 .unites { display: flex; gap: 3px; align-items: baseline; margin-top: 1px; }
 .unite { padding: 0 4px; font-size: 11px; line-height: 1.5; color: var(--sourd);
@@ -283,6 +293,7 @@ kbd { padding: 1px 5px; font: inherit; font-size: 11.5px;
 .unite:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 .unite.groupe { color: var(--afaire); font-weight: 500; }
 .unite.absent { color: var(--trait-fort); }
+.unite.herite { font-style: italic; }
 
 .lieu { padding: 5px 7px; font-size: 12px; color: var(--sourd); cursor: pointer;
   background: transparent; border: 1px solid var(--trait); border-radius: 3px; }

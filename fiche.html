@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=7">
+<link rel="stylesheet" href="commun.css?v=8">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=7"></script>
+<script src="commun.js?v=8"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v7';
+var VERSION = 'v8';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -57,10 +57,21 @@ function projDe(idAnnee, idFormation) {
     return p.annee === idAnnee && p.formation === idFormation;
   });
 }
-function venteDe(idAnnee, idFormation, idSegment) {
+/* Plusieurs lignes peuvent porter la même année et le même segment. La grille
+   n'a qu'une case par segment : plutôt que de n'en montrer qu'une au hasard
+   et de laisser les totaux paraître faux, on les compte et on le dit. */
+function ventesDe(idAnnee, idFormation, idSegment) {
   return OF.table('Ventes_inter').filter(function (v) {
     return v.annee === idAnnee && v.formation === idFormation && v.segment === idSegment;
-  })[0] || null;
+  });
+}
+function venteDe(idAnnee, idFormation, idSegment) {
+  return ventesDe(idAnnee, idFormation, idSegment)[0] || null;
+}
+function colExiste(table, col) {
+  var meta = OF.doc.colonnes[table];
+  if (meta && Object.keys(meta).length) return !!meta[col];
+  return OF.table(table).some(function (l) { return col in l; });
 }
 function segmentsDe(f) {
   var connus = OF.parId(OF.table('Segments'));
@@ -858,23 +869,30 @@ function detailVentes(f, annees) {
       return v.formation === f.id && v.annee === a.id;
     }).forEach(function (v) {
       var col = colonneQuantite(v);
+      var cat = v.categorie_appliquee || v.categorie;
       lignes.push([String(a.annee), 'inter', nomSegment(v.segment),
         OF.texte(v.base) || '—',
-        v.categorie ? nomCategorie(v.categorie) : '—',
+        cat ? nomCategorie(cat) : '—',
         col === 'nb_groupes'
           ? OF.plur(v.nb_groupes, 'groupe')
+            + ' de ' + OF.ent(v.participants_par_groupe || f.effectif_max || 0)
           : OF.plur(v.nb_places, 'place'),
-        v.recette ? OF.eur(v.recette) : '—']);
+        (v.places || v.places === 0) ? OF.ent(v.places) : '—',
+        v.recette ? OF.eur(v.recette) : '—',
+        OF.texte(v.alerte)]);
     });
     OF.table('Ventes_intra').filter(function (v) {
       return v.formation === f.id && v.annee === a.id;
     }).forEach(function (v) {
+      var ci = v.categorie_appliquee || v.categorie;
       lignes.push([String(a.annee), 'intra', nomSegment(v.segment),
         OF.texte(v.base) || '—',
-        v.categorie ? nomCategorie(v.categorie) : '—',
+        ci ? nomCategorie(ci) : '—',
         OF.plur(v.nb_sessions, 'session')
-          + (v.participants_par_session ? ' × ' + OF.ent(v.participants_par_session) : ''),
-        v.recette ? OF.eur(v.recette) : '—']);
+          + ' de ' + OF.ent(v.participants_par_session || f.effectif_max || 0),
+        (v.places || v.places === 0) ? OF.ent(v.places) : '—',
+        v.recette ? OF.eur(v.recette) : '—',
+        '']);
     });
   });
 
@@ -896,15 +914,17 @@ function detailVentes(f, annees) {
   cadre.className = 'defilant';
   var t = document.createElement('table');
   t.className = 'matrice';
+  var entetes = ['Année', 'Vente', 'Segment', 'Base de facturation', 'Tarif', 'Quantité',
+    'Places', 'Recette', 'Ce que dit le document'];
   t.innerHTML = '<thead><tr>'
-    + ['Année', 'Vente', 'Segment', 'Base de facturation', 'Tarif', 'Quantité', 'Recette']
-      .map(function (h, i) {
-        return '<th class="' + (i === 6 ? '' : 'gauche') + '">' + OF.echappe(h) + '</th>';
-      }).join('')
+    + entetes.map(function (h, i) {
+      return '<th class="' + (i === 6 || i === 7 ? '' : 'gauche') + '">' + OF.echappe(h) + '</th>';
+    }).join('')
     + '</tr></thead><tbody>' + lignes.map(function (L) {
       return '<tr>' + L.map(function (c, i) {
-        return '<td class="' + (i === 6 ? 'calcul' : 'gauche libelle') + '">'
-          + OF.echappe(c) + '</td>';
+        var classe = (i === 6 || i === 7) ? 'calcul' : 'gauche libelle';
+        if (i === 8 && c) classe = 'gauche second alerte-texte';
+        return '<td class="' + classe + '">' + OF.echappe(c) + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody>';
   cadre.appendChild(t);
@@ -967,7 +987,12 @@ function cellSessions(f, a, iAn, sessions) {
 
 function cellPlaces(f, a, idSeg, iAn, iCol, sessions) {
   var td = document.createElement('td');
-  var v = venteDe(a.id, f.id, idSeg);
+  var toutes = ventesDe(a.id, f.id, idSeg);
+  var v = toutes[0] || null;
+
+  var rangee = document.createElement('div');
+  rangee.className = 'quantite';
+
   var el = document.createElement('input');
   el.className = 'champ' + (sessions && !quantite(v) ? ' vide-attendu' : '');
   el.inputMode = 'numeric';
@@ -978,12 +1003,65 @@ function cellPlaces(f, a, idSeg, iAn, iCol, sessions) {
   el.dataset.ligne = iAn;
   el.dataset.col = iCol;
   el.setAttribute('aria-label', 'Places ou groupes ' + nomSegment(idSeg) + ' en ' + a.annee);
-  brancherCellule(el, function (val) { return ecrireQuantite(a.id, f, idSeg, val); });
-  td.appendChild(el);
+  if (toutes.length > 1) {
+    el.disabled = true;
+    el.title = toutes.length + ' lignes de vente sur ce segment : à corriger dans la table';
+  } else {
+    brancherCellule(el, function (val) { return ecrireQuantite(a.id, f, idSeg, val); });
+  }
+  rangee.appendChild(el);
+
+  /* « 1 groupe de 8 » : le nombre de groupes, puis leur taille. Le second
+     champ n'apparaît que sur les lignes facturées au groupe, et seulement si
+     le document sait où ranger la réponse. */
+  if (v && estGroupe(v.base) && colExiste('Ventes_inter', 'participants_par_groupe')) {
+    var fois = document.createElement('span');
+    fois.className = 'fois';
+    fois.textContent = '×';
+    rangee.appendChild(fois);
+
+    var t = document.createElement('input');
+    t.className = 'champ taille';
+    t.inputMode = 'numeric';
+    t.dataset.role = 'taille';
+    t.dataset.segment = idSeg;
+    t.placeholder = f.effectif_max || '—';
+    t.title = 'Participants par groupe. Laissé vide, le groupe prend l\'effectif maximum de '
+      + 'la formation' + (f.effectif_max ? ' (' + OF.ent(f.effectif_max) + ')' : '') + '.';
+    t.value = v.participants_par_groupe || '';
+    t.setAttribute('aria-label', 'Participants par groupe, ' + nomSegment(idSeg)
+      + ' en ' + a.annee);
+    brancherCellule(t, function (val) {
+      return OF.appliquer([['UpdateRecord', 'Ventes_inter', v.id,
+        { participants_par_groupe: val || null }]], RELIRE, rafraichir);
+    });
+    rangee.appendChild(t);
+  }
+  td.appendChild(rangee);
 
   var unites = unitesVente(f, a, idSeg);
   if (unites) td.appendChild(unites);
+
+  var ennui = document.createElement('div');
+  ennui.className = 'ennui';
+  ennui.dataset.segment = idSeg;
+  poserEnnui(ennui, toutes);
+  td.appendChild(ennui);
   return td;
+}
+
+/* Ce que le document reproche à la ligne : sa propre colonne `alerte`, que
+   personne ne lisait, et le cas des lignes en double. */
+function poserEnnui(el, toutes) {
+  var texte = '';
+  if (toutes.length > 1) {
+    texte = OF.plur(toutes.length, 'ligne') + ' sur ce segment';
+  } else if (toutes.length === 1 && OF.texte(toutes[0].alerte)) {
+    texte = OF.texte(toutes[0].alerte);
+  }
+  el.textContent = texte ? (texte.length > 26 ? texte.slice(0, 25) + '…' : texte) : '';
+  el.title = texte;
+  el.style.display = texte ? '' : 'none';
 }
 
 /* Sous le nombre : ce qu'il compte, et à quel tarif. Deux pastilles qui
@@ -1033,12 +1111,18 @@ function poserBase(b, v) {
   b.className = 'unite' + (estGroupe(base) ? ' groupe' : '') + (v ? '' : ' absent');
 }
 
+/* On affiche la catégorie qui tarife vraiment la ligne — `categorie_appliquee`
+   quand le document la calcule — et non le seul choix explicite : sinon une
+   ligne correctement tarifée par le défaut du segment s'affichait « tarif ? ». */
 function poserCategorie(b, v) {
-  var id = v && v.categorie;
-  b.textContent = id ? nomCategorie(id) : 'tarif ?';
-  b.title = id ? 'Catégorie tarifaire : ' + nomCategorie(id) + ' — cliquer pour changer'
+  var explicite = v && v.categorie;
+  var appliquee = (v && v.categorie_appliquee) || explicite;
+  b.textContent = appliquee ? nomCategorie(appliquee) : 'tarif ?';
+  b.title = appliquee
+    ? 'Catégorie tarifaire : ' + nomCategorie(appliquee)
+      + (explicite ? '' : ', héritée du segment') + ' — cliquer pour changer'
     : 'Aucune catégorie tarifaire — cliquer pour en choisir une';
-  b.className = 'unite' + (id ? '' : ' absent');
+  b.className = 'unite' + (appliquee ? (explicite ? '' : ' herite') : ' absent');
 }
 
 function brancherCellule(el, ecrire) {
@@ -1254,13 +1338,18 @@ function rafraichir() {
     if (chS && chS !== actif && !chS.disabled) chS.value = sessions || '';
 
     segs.forEach(function (idSeg) {
-      var v = venteDe(a.id, f.id, idSeg);
-      places += (v && v.nb_places) || 0;
+      var toutes = ventesDe(a.id, f.id, idSeg);
+      var v = toutes[0] || null;
+      places += (v && (v.places || v.nb_places)) || 0;
       var chB = tr.querySelector('[data-chip="base"][data-segment="' + idSeg + '"]');
       if (chB) poserBase(chB, v);
       var chC = tr.querySelector('[data-chip="categorie"][data-segment="' + idSeg + '"]');
       if (chC) poserCategorie(chC, v);
-      var ch = tr.querySelector('.champ[data-segment="' + idSeg + '"]');
+      var en = tr.querySelector('.ennui[data-segment="' + idSeg + '"]');
+      if (en) poserEnnui(en, toutes);
+      var t = tr.querySelector('.taille[data-segment="' + idSeg + '"]');
+      if (t && t !== actif) t.value = (v && v.participants_par_groupe) || '';
+      var ch = tr.querySelector('.champ[data-role="places"][data-segment="' + idSeg + '"]');
       if (!ch) return;
       if (ch !== actif) ch.value = quantite(v) || '';
       ch.classList.toggle('vide-attendu', !!sessions && !ch.value);
