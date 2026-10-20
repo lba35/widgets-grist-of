@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=10">
+<link rel="stylesheet" href="commun.css?v=13">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -28,7 +28,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=10"></script>
+<script src="commun.js?v=13"></script>
 <script>
 /* =========================================================================
    Plan de charge — le vivier d'intervenants, profil par profil.
@@ -42,7 +42,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v10';
+var VERSION = 'v13';
 
 var TABLES = ['Annees', 'Formations', 'Intervenants', 'Intervenants_formation',
   'Vivier', 'Projections', 'Ventes_intra', 'Parametres', 'Gestionnaire'];
@@ -103,30 +103,51 @@ function rendreRail() {
     });
   }
   if (!profils.length) {
+    rail.dataset.ids = '';
     rail.innerHTML = '<p class="rail-vide">Aucun profil ne correspond. Les profils viennent de '
       + 'la table Intervenants, attachés aux formations dans Intervenants_formation.</p>';
     return;
   }
-  rail.innerHTML = profils.map(function (p) {
-    var lignes = vivierDe(idAnnee).filter(function (v) { return v.ressource === p.id; });
-    var recruter = lignes.reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
-    var classe = recruter ? 'p-alerte' : (lignes.length ? 'p-fait' : 'p-vide');
-    var detail = recruter ? (recruter + ' à recruter')
-      : (lignes.length ? 'couvert' : 'aucune ligne');
-    return '<button class="item" role="listitem" type="button" data-id="' + p.id + '"'
-      + (profilCourant === p.id ? ' aria-current="true"' : '') + '>'
-      + '<span class="item-nom">' + OF.echappe(p.intitule) + '</span>'
-      + '<span class="item-etat"><span class="pastille ' + classe + '"></span>'
-      + OF.echappe(detail) + '</span></button>';
-  }).join('');
-  Array.prototype.forEach.call(rail.querySelectorAll('.item'), function (b) {
-    b.addEventListener('click', function () {
-      profilCourant = +b.dataset.id;
-      rendreRail();
-      rendrePage();
+  /* mise à jour sur place : reconstruire la liste après chaque enregistrement
+     détruisait les boutons entre l'appui et le relâchement de la souris, et
+     le clic se perdait */
+  var ids = profils.map(function (p) { return p.id; }).join(',');
+  if (rail.dataset.ids === ids) {
+    var boutons = rail.querySelectorAll('.item');
+    for (var i = 0; i < boutons.length && i < profils.length; i++) majItem(boutons[i], profils[i]);
+  } else {
+    rail.dataset.ids = ids;
+    rail.innerHTML = '';
+    profils.forEach(function (p) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'item';
+      b.setAttribute('role', 'listitem');
+      b.dataset.id = p.id;
+      b.innerHTML = '<span class="item-nom"></span><span class="item-etat"></span>';
+      b.addEventListener('click', function () {
+        profilCourant = p.id;
+        rendreRail();
+        rendrePage();
+      });
+      majItem(b, p);
+      rail.appendChild(b);
     });
-  });
+  }
   rendreAvance();
+}
+
+function majItem(b, p) {
+  var lignes = vivierDe(idAnnee).filter(function (v) { return v.ressource === p.id; });
+  var recruter = lignes.reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
+  var classe = recruter ? 'p-alerte' : (lignes.length ? 'p-fait' : 'p-vide');
+  var detail = recruter ? (recruter + ' à recruter')
+    : (lignes.length ? 'couvert' : 'aucune ligne');
+  b.querySelector('.item-nom').textContent = OF.texte(p.intitule);
+  b.querySelector('.item-etat').innerHTML =
+    '<span class="pastille ' + classe + '"></span>' + OF.echappe(detail);
+  if (profilCourant === p.id) b.setAttribute('aria-current', 'true');
+  else b.removeAttribute('aria-current');
 }
 
 function rendreAvance() {

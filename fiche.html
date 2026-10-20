@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=10">
+<link rel="stylesheet" href="commun.css?v=13">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=10"></script>
+<script src="commun.js?v=13"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v10';
+var VERSION = 'v13';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -76,6 +76,26 @@ function colExiste(table, col) {
 function segmentsDe(f) {
   var connus = OF.parId(OF.table('Segments'));
   return OF.refs(f.segments).filter(function (id) { return connus[id]; });
+}
+
+/* Les colonnes de la grille. Aux segments visés par la fiche s'ajoutent ceux
+   qui portent déjà des ventes sans être visés : sans cela, des places saisies
+   disparaissaient de l'écran dès qu'on retirait le segment du public visé, et
+   elles continuaient pourtant à compter dans la recette et le remplissage. */
+function segmentsAffiches(f) {
+  var connus = OF.parId(OF.table('Segments'));
+  var vus = segmentsDe(f);
+  var dedans = {};
+  vus.forEach(function (id) { dedans[id] = 1; });
+  OF.table('Ventes_inter').forEach(function (v) {
+    if (v.formation !== f.id || !v.segment || dedans[v.segment] || !connus[v.segment]) return;
+    dedans[v.segment] = 1;
+    vus.push(v.segment);
+  });
+  return vus;
+}
+function estVise(f, idSegment) {
+  return segmentsDe(f).indexOf(idSegment) >= 0;
 }
 function nomSegment(id) {
   var s = OF.parId(OF.table('Segments'))[id];
@@ -191,10 +211,11 @@ function ecrireQuantite(idAnnee, f, idSegment, valeur) {
   return OF.appliquer([['AddRecord', 'Ventes_inter', null, champs]], RELIRE, rafraichir);
 }
 
-/* Changer de base change l'unité : trente-six places ne font pas trente-six
-   groupes. On ne reporte donc pas le nombre — on vide la case et on dit ce
-   qui a été retiré, plutôt que de laisser le document calculer une recette
-   sur une quantité qui ne veut plus rien dire. */
+/* Changer de base change l'unité. Le nombre suit — on ne le jette pas : le
+   geste le plus courant est de taper une quantité puis de corriger l'unité,
+   et effacer la frappe à ce moment-là est insupportable. Mais trois places ne
+   font pas trois groupes : le report est annoncé, et l'on demande de vérifier.
+   Un chiffre reporté et signalé se corrige ; un chiffre effacé est perdu. */
 function changerBase(f, a, idSegment, nouvelle) {
   var v = venteDe(a.id, f.id, idSegment);
   var champs = { base: nouvelle };
@@ -205,12 +226,15 @@ function changerBase(f, a, idSegment, nouvelle) {
     if (avant !== apres) {
       var ancienne = v[avant] || 0;
       champs[avant] = 0;
-      champs[apres] = 0;
+      champs[apres] = ancienne;
       if (ancienne) {
-        dire = (avant === 'nb_places'
-          ? OF.plur(ancienne, 'place') + ' ' + OF.accord(ancienne, 'retirée', 'retirées')
-          : OF.plur(ancienne, 'groupe') + ' ' + OF.accord(ancienne, 'retiré', 'retirés'))
-          + ' : saisissez le nombre de ' + (apres === 'nb_places' ? 'places' : 'groupes') + '.';
+        dire = OF.ent(ancienne) + ' '
+          + (apres === 'nb_groupes'
+            ? OF.accord(ancienne, 'place devient 1 groupe', 'places deviennent '
+                + OF.ent(ancienne) + ' groupes')
+            : OF.accord(ancienne, 'groupe devient 1 place', 'groupes deviennent '
+                + OF.ent(ancienne) + ' places'))
+          + ' — à vérifier.';
       }
     }
     return OF.appliquer([['UpdateRecord', 'Ventes_inter', v.id, champs]], RELIRE, function () {
@@ -320,27 +344,57 @@ function listeFiltree() {
   });
 }
 
+/* Le rail se met à jour sur place. Le reconstruire après chaque
+   enregistrement détruisait les boutons entre l'appui et le relâchement de
+   la souris : le clic se perdait, la formation ne changeait pas, et la
+   saisie suivante partait dans la précédente. C'est l'essentiel de ce qui
+   ressemblait à « ça n'enregistre pas ». */
+var dernierAffiche = null;
+
+function majItem(b, f) {
+  var a = avancement(f);
+  var detail = a.etat === 'partiel' ? (a.remplis + '/' + a.attendus) : ETIQUETTES[a.etat];
+  b.querySelector('.item-nom').textContent = OF.texte(f.intitule);
+  b.querySelector('.item-etat').innerHTML =
+    '<span class="pastille ' + PASTILLES[a.etat] + '"></span>' + OF.echappe(detail);
+  if (courant === f.id) b.setAttribute('aria-current', 'true');
+  else b.removeAttribute('aria-current');
+}
+
 function rendreRail() {
   var liste = listeFiltree(), rail = OF.$('rail');
   if (!liste.length) {
+    rail.dataset.ids = '';
     rail.innerHTML = '<p class="rail-vide">Aucune formation ne correspond à cette recherche.</p>';
     rendreAvance();
     return;
   }
-  rail.innerHTML = liste.map(function (f) {
-    var a = avancement(f);
-    var detail = a.etat === 'partiel' ? (a.remplis + '/' + a.attendus) : ETIQUETTES[a.etat];
-    return '<button class="item" role="listitem" type="button" data-id="' + f.id + '"'
-      + (courant === f.id ? ' aria-current="true"' : '') + '>'
-      + '<span class="item-nom">' + OF.echappe(f.intitule) + '</span>'
-      + '<span class="item-etat"><span class="pastille ' + PASTILLES[a.etat] + '"></span>'
-      + OF.echappe(detail) + '</span></button>';
-  }).join('');
-  Array.prototype.forEach.call(rail.querySelectorAll('.item'), function (b) {
-    b.addEventListener('click', function () { ouvrir(+b.dataset.id); });
-  });
-  var actif = rail.querySelector('[aria-current="true"]');
-  if (actif && actif.scrollIntoViewIfNeeded) actif.scrollIntoViewIfNeeded();
+  var ids = liste.map(function (f) { return f.id; }).join(',');
+  if (rail.dataset.ids === ids) {
+    var boutons = rail.querySelectorAll('.item');
+    for (var i = 0; i < boutons.length && i < liste.length; i++) majItem(boutons[i], liste[i]);
+  } else {
+    rail.dataset.ids = ids;
+    rail.innerHTML = '';
+    liste.forEach(function (f) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'item';
+      b.setAttribute('role', 'listitem');
+      b.dataset.id = f.id;
+      b.innerHTML = '<span class="item-nom"></span><span class="item-etat"></span>';
+      b.addEventListener('click', function () { ouvrir(f.id); });
+      majItem(b, f);
+      rail.appendChild(b);
+    });
+  }
+  /* on ne ramène le rail sur la formation ouverte que lorsqu'elle change :
+     sinon chaque enregistrement ferait sauter le défilement sous la main */
+  if (dernierAffiche !== courant) {
+    dernierAffiche = courant;
+    var actif = rail.querySelector('[aria-current="true"]');
+    if (actif && actif.scrollIntoViewIfNeeded) actif.scrollIntoViewIfNeeded();
+  }
   rendreAvance();
 }
 
@@ -361,6 +415,10 @@ function rendreAvance() {
 /* --------------------------------------------------------------- fiche -- */
 function ouvrir(id) {
   if (id === courant) return;                // déjà ouverte : ne rien bousculer
+  /* Ce qui vient d'être tapé part avant qu'on quitte la fiche : sinon la
+     frappe en attente s'enregistrerait dans le vide, et l'on reviendrait
+     plus tard sur une formation où « ça n'avait pas été pris ». */
+  OF.viderDifferes();
   courant = id;
   curseurGrist = id;
   /* Si la fiche est liée à un widget Formations, on déplace aussi le curseur
@@ -689,7 +747,11 @@ function ressources(f) {
       colonnes: [
         { col: 'type_salle', libelle: 'Type de salle', type: 'ref', ref: 'Types_salles' },
         { col: 'nb_salles', libelle: 'Salles', type: 'num' },
-        { col: 'nb_jours', libelle: 'Jours', type: 'num', placeholder: OF.dec(f.nb_jours || 0) },
+        /* laissé vide, le document reprend la durée de la formation — encore
+           faut-il qu'elle soit renseignée, sinon un « 0 » en filigrane
+           laisserait croire à une valeur saisie */
+        { col: 'nb_jours', libelle: 'Jours', type: 'num',
+          placeholder: f.nb_jours ? OF.dec(f.nb_jours) : '—' },
         { col: 'commentaire', libelle: 'Commentaire', type: 'texte' },
         { col: 'jours_salle_par_session', libelle: 'Jours-salle', type: 'calcul', format: OF.dec }
       ],
@@ -768,7 +830,7 @@ function cout(f) {
 /* --------------------------------------------------------- projections -- */
 function projections(f) {
   var zone = document.createElement('div');
-  var segs = segmentsDe(f), annees = OF.anneesTriees();
+  var segs = segmentsAffiches(f), annees = OF.anneesTriees();
 
   if (!annees.length) {
     zone.innerHTML = '<p class="note">Aucune année dans la table Annees.</p>';
@@ -785,7 +847,12 @@ function projections(f) {
   var t = document.createElement('table');
   t.className = 'matrice';
   var entete = '<thead><tr><th class="gauche">Année</th><th>Sessions</th><th></th>';
-  segs.forEach(function (id) { entete += '<th>' + OF.echappe(nomSegment(id)) + '</th>'; });
+  segs.forEach(function (id) {
+    var hors = !estVise(f, id);
+    entete += '<th' + (hors ? ' class="hors-cible" title="Segment non visé par cette fiche, '
+      + 'mais des ventes y sont saisies"' : '') + '>' + OF.echappe(nomSegment(id))
+      + (hors ? ' <span class="pastille p-partiel"></span>' : '') + '</th>';
+  });
   entete += '<th class="calcule">Remplissage</th><th>Recette</th><th>Résultat</th></tr></thead>';
   t.innerHTML = entete;
 
@@ -811,9 +878,22 @@ function projections(f) {
       inM.title = 'Plusieurs lignes de projection pour cette année';
       tdM.appendChild(inM);
       tr.appendChild(tdM);
+      /* Signaler le doublon ne suffit pas : il faut pouvoir aller le corriger. */
       var tdD = document.createElement('td');
-      tdD.className = 'doublon';
-      tdD.textContent = lignes.length + ' lignes';
+      var bD = document.createElement('button');
+      bD.type = 'button';
+      bD.className = 'doublon lien';
+      bD.textContent = lignes.length + ' lignes';
+      bD.title = 'Cette année porte ' + lignes.length + ' lignes de session : en retirer une '
+        + 'pour rendre la saisie directe';
+      bD.addEventListener('click', function () {
+        detailSessionsOuvert = true;
+        var d = OF.$('detail-sessions');
+        if (!d) return;
+        d.open = true;
+        d.scrollIntoView({ block: 'nearest' });
+      });
+      tdD.appendChild(bD);
       tr.appendChild(tdD);
     } else {
       tr.appendChild(cellSessions(f, a, iAn, sessions));
@@ -846,7 +926,8 @@ function projections(f) {
   });
   t.appendChild(corps);
   zone.appendChild(t);
-  zone.appendChild(noteUnites(segs));
+  zone.appendChild(noteUnites(f, segs));
+  zone.appendChild(detailProjections(f));
   zone.appendChild(detailVentes(f, annees));
   zone.appendChild(outilsReprise(f, annees));
   zone.appendChild(bilan(f));
@@ -860,7 +941,78 @@ function projections(f) {
 
    Les ventes intra ont leur propre section plus bas : elles n'entrent pas
    dans la recette des projections, qui ne compte que l'inter. */
-var detailOuvert = false;
+var detailOuvert = false, detailSessionsOuvert = false;
+
+/* Les lignes de session, modifiables elles aussi. La grille n'a qu'une case
+   par année : quand une année en porte deux — ce qui arrive — elle ne peut
+   que le signaler. C'est ici qu'on en retire une. */
+function detailProjections(f) {
+  var d = document.createElement('details');
+  d.className = 'chiffres';
+  d.id = 'detail-sessions';
+  d.style.marginTop = '14px';
+  d.open = detailSessionsOuvert;
+  d.addEventListener('toggle', function () { detailSessionsOuvert = d.open; });
+
+  var rang = OF.parId(OF.table('Annees'));
+  var lignes = OF.table('Projections')
+    .filter(function (p) { return p.formation === f.id; })
+    .sort(function (x, y) {
+      return ((rang[x.annee] && rang[x.annee].annee) || 0)
+        - ((rang[y.annee] && rang[y.annee].annee) || 0);
+    });
+
+  /* une année qui porte plus d'une ligne, c'est ce qu'on vient corriger ici */
+  var parAnnee = {};
+  lignes.forEach(function (p) { parAnnee[p.annee] = (parAnnee[p.annee] || 0) + 1; });
+  var doubles = Object.keys(parAnnee).filter(function (k) { return parAnnee[k] > 1; }).length;
+
+  var s = document.createElement('summary');
+  s.textContent = 'Le détail des ' + OF.plur(lignes.length, 'ligne') + ' de session'
+    + (doubles ? ' — ' + OF.plur(doubles, 'année') + ' en double' : '');
+  if (doubles) s.classList.add('alerte-texte');
+  d.appendChild(s);
+
+  var colonnes = [
+    { col: 'annee', libelle: 'Année', type: 'ref', ref: 'Annees' },
+    { col: 'nb_sessions', libelle: 'Sessions', type: 'num' },
+    { col: 'localisation', libelle: 'Lieu', type: 'choice' },
+    { col: 'commentaire', libelle: 'Commentaire', type: 'texte', large: true }
+  ];
+  [['places', 'Places', OF.ent], ['recette', 'Recette', OF.eur],
+   ['resultat', 'Résultat', OF.eur], ['alerte_tarif', 'Ce que dit le document', OF.texte]
+  ].forEach(function (c) {
+    if (colExiste('Projections', c[0])) {
+      colonnes.push({ col: c[0], libelle: c[1], type: 'calcul', format: c[2] });
+    }
+  });
+
+  var cadre = document.createElement('div');
+  cadre.className = 'defilant';
+  cadre.appendChild(OF.sousTable({
+    table: 'Projections',
+    lignes: lignes,
+    colonnes: colonnes,
+    nouveau: { formation: f.id },
+    relire: RELIRE,
+    apres: rendreTout,
+    libelleAjout: 'Ajouter une ligne de session',
+    vide: 'Aucune ligne de session pour cette formation.'
+  }));
+  d.appendChild(cadre);
+
+  var n = document.createElement('p');
+  n.className = 'note';
+  n.style.marginTop = '10px';
+  n.textContent = doubles
+    ? 'Deux lignes sur la même année additionnent leurs sessions, et la case de la grille '
+      + 'passe en lecture seule pour ne pas écrire dans l\'une au hasard. Retirer celle de '
+      + 'trop rend la saisie directe.'
+    : 'Une ligne par année suffit. La grille au-dessus écrit directement dedans ; ce tableau '
+      + 'sert à corriger les doublons et à supprimer une année devenue inutile.';
+  d.appendChild(n);
+  return d;
+}
 
 function detailVentes(f, annees) {
   var d = document.createElement('details');
@@ -931,7 +1083,7 @@ function detailVentes(f, annees) {
 
 /* Ce que disent les pastilles, et ce qu'il manque dans le document pour
    pouvoir vendre en groupes. */
-function noteUnites(segs) {
+function noteUnites(f, segs) {
   var p = document.createElement('p');
   p.className = 'note';
   p.style.margin = '10px 0 0';
@@ -941,9 +1093,13 @@ function noteUnites(segs) {
   if (bases.length > 1) {
     p.innerHTML = 'Sous chaque nombre, <b>pl.</b> ou <b>gr.</b> dit s\'il compte des places '
       + 'ouvertes ou des groupes — un clic change la base de facturation. Les ventes au '
-      + 'groupe, comme celles du CHU, se comptent en groupes au tarif groupe. Changer de base '
-      + 'vide la case : trente-six places ne font pas trente-six groupes, le nombre est à '
-      + 'ressaisir dans la nouvelle unité.'
+      + 'groupe, comme celles du CHU, se comptent en groupes au tarif groupe. Le nombre déjà '
+      + 'saisi suit le changement d\'unité et le widget le signale : trois places ne font pas '
+      + 'trois groupes, c\'est à vérifier.'
+      + (segs.some(function (id) { return !estVise(f, id); })
+        ? ' Une colonne marquée d\'un point ocre porte des ventes sur un segment que la fiche '
+          + 'ne vise plus : elles comptent toujours dans la recette, elles sont donc montrées.'
+        : '')
       + (plusieursTarifs ? ' La seconde pastille est la catégorie tarifaire, quand le segment '
         + 'en autorise plusieurs : c\'est elle qui pose le prix.' : '');
   } else if (!baseEstUneListe()) {
@@ -982,12 +1138,15 @@ function cellPlaces(f, a, idSeg, iAn, iCol, sessions) {
   var rangee = document.createElement('div');
   rangee.className = 'quantite';
 
+  /* on ne réclame une valeur que sur les segments que la fiche vise */
+  var attendu = sessions && estVise(f, idSeg);
   var el = document.createElement('input');
-  el.className = 'champ' + (sessions && !quantite(v) ? ' vide-attendu' : '');
+  el.className = 'champ' + (attendu && !quantite(v) ? ' vide-attendu' : '');
   el.inputMode = 'numeric';
   el.placeholder = '—';
   el.value = quantite(v) || '';
   el.dataset.role = 'places';
+  el.dataset.attendu = attendu ? '1' : '';
   el.dataset.segment = idSeg;
   el.dataset.ligne = iAn;
   el.dataset.col = iCol;
@@ -1014,6 +1173,7 @@ function cellPlaces(f, a, idSeg, iAn, iCol, sessions) {
     t.inputMode = 'numeric';
     t.dataset.role = 'taille';
     t.dataset.segment = idSeg;
+    t.dataset.ligne = iAn;          /* sans quoi toutes les années partagent une clé */
     t.placeholder = f.effectif_max || '—';
     t.title = 'Participants par groupe. Laissé vide, le groupe prend l\'effectif maximum de '
       + 'la formation' + (f.effectif_max ? ' (' + OF.ent(f.effectif_max) + ')' : '') + '.';
@@ -1114,9 +1274,15 @@ function poserCategorie(b, v) {
   b.className = 'unite' + (appliquee ? (explicite ? '' : ' herite') : ' absent');
 }
 
+/* La clé identifie la case de façon unique dans tout le document : formation,
+   année, segment, rôle. Sans la formation ni l'année, deux cases de même
+   position se partageaient la même clé et la seconde frappe annulait
+   l'enregistrement de la première — en changeant de formation, la saisie
+   précédente disparaissait. */
 function brancherCellule(el, ecrire) {
   var origine = el.value;
-  var cle = el.dataset.role + ':' + el.dataset.ligne + ':' + (el.dataset.segment || '');
+  var cle = [courant, el.dataset.role, el.dataset.ligne || '',
+    el.dataset.segment || ''].join(':');
   var enregistrer = function () {
     var v = el.value.trim() === '' ? 0 : Math.round(OF.nombre(el.value));
     if (v < 0) {
@@ -1124,10 +1290,17 @@ function brancherCellule(el, ecrire) {
       OF.signaler('Un nombre négatif n\'a pas de sens ici', true);
       return;
     }
-    ecrire(v).catch(function () { el.classList.add('erreur'); });
+    ecrire(v).then(function () {
+      /* la case s'éclaire une seconde : l'enregistrement se voit là où l'œil
+         est posé, et pas seulement dans un coin de l'écran */
+      el.classList.remove('enregistre');
+      void el.offsetWidth;                   // pour rejouer l'animation
+      el.classList.add('enregistre');
+    }).catch(function () { el.classList.add('erreur'); });
   };
   el.addEventListener('input', function () {
     el.classList.remove('erreur');
+    el.classList.remove('enregistre');
     OF.differer(cle, enregistrer);
   });
   el.addEventListener('blur', function () { if (OF.forcer(cle)) enregistrer(); });
@@ -1311,7 +1484,7 @@ function validation(f) {
 function rafraichir() {
   var f = formationCourante();
   if (!f) return;
-  var fiche = OF.$('fiche'), segs = segmentsDe(f), actif = document.activeElement;
+  var fiche = OF.$('fiche'), segs = segmentsAffiches(f), actif = document.activeElement;
 
   OF.anneesTriees().forEach(function (a, iAn) {
     var tr = fiche.querySelector('tr[data-ligne="' + iAn + '"]');
@@ -1341,7 +1514,7 @@ function rafraichir() {
       var ch = tr.querySelector('.champ[data-role="places"][data-segment="' + idSeg + '"]');
       if (!ch) return;
       if (ch !== actif) ch.value = quantite(v) || '';
-      ch.classList.toggle('vide-attendu', !!sessions && !ch.value);
+      ch.classList.toggle('vide-attendu', !!sessions && !!ch.dataset.attendu && !ch.value);
     });
 
     /* Le remplissage se mesure en places occupées : un groupe en apporte
@@ -1393,6 +1566,11 @@ function rendreTout() {
 
 /* ------------------------------------------------------------- montage -- */
 OF.$('recherche').addEventListener('input', function (ev) { filtre = ev.target.value; rendreRail(); });
+/* quitter l'onglet, replier la fenêtre : ce qui attend part aussi */
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden') OF.viderDifferes();
+});
+window.addEventListener('pagehide', function () { OF.viderDifferes(); });
 OF.$('prec').addEventListener('click', function () { voisine(-1); });
 OF.$('suiv').addEventListener('click', function () { voisine(1); });
 document.addEventListener('keydown', function (ev) {

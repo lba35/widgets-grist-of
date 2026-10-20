@@ -49,6 +49,20 @@ colonne de référence.
 **Ne jamais remplacer une saisie sans le dire.** La reprise d'une année sur les suivantes
 compte les valeurs qu'elle écraserait et demande confirmation en les nommant.
 
+**Toute table écrite est relue.** La liste des tables à recharger après un enregistrement n'est
+plus à la main de l'appelant : `appliquer` ajoute d'office celles que les actions touchent.
+L'oublier redessinait l'écran depuis une copie périmée — la valeur partait bien dans le
+document, mais la case réaffichait l'ancienne, et l'on croyait que rien ne s'enregistrait.
+
+**Les listes se mettent à jour sur place.** Reconstruire le rail après chaque enregistrement
+détruisait les boutons entre l'appui et le relâchement de la souris : le clic se perdait et la
+formation ne changeait pas. Les éléments sont modifiés, jamais remplacés, tant que la liste
+elle-même n'a pas changé.
+
+**Chaque case a une clé d'écriture unique** — formation, année, segment, rôle. Deux cases de
+même position partageant une clé, la seconde frappe annulait l'enregistrement de la première.
+Ce qui attend encore part avant de quitter la fiche, de changer d'onglet ou de fermer la page.
+
 **Le curseur ne saute pas.** Après enregistrement, seules les valeurs calculées sont
 rafraîchies ; le champ en cours de frappe garde le curseur et son contenu. Dans le tableau des
 objectifs, où l'écran entier se redessine, la valeur part à la sortie du champ et le curseur
@@ -96,9 +110,20 @@ l'effectif maximum de la formation quand on le laisse vide, comme le fait déjà
 
 La colonne `alerte` que le document calcule sur chaque ligne de vente est reprise sous la case
 concernée et en toutes lettres dans le détail : catégorie tarifaire à choisir, tarif introuvable,
-places et groupes saisis sur la même ligne. Et quand plusieurs lignes de vente portent la même
-année et le même segment, la case le dit et passe en lecture seule plutôt que de n'en montrer
-qu'une et de laisser les totaux paraître faux.
+places et groupes saisis sur la même ligne.
+
+## Les doublons
+
+La grille des projections n'a qu'une case par année et par segment. Quand le document porte
+deux lignes pour la même case, elle ne peut pas en montrer une au hasard : elle les additionne,
+passe en lecture seule et le dit. Deux tableaux dépliables sous la grille — `Le détail des
+lignes de session` et `Le détail des lignes de vente inter` — listent toutes les lignes de la
+formation, année par année, et permettent de les modifier, d'en ajouter et d'en retirer. C'est
+là que se corrige un doublon, et là que se voit une ligne portée par un segment que la
+formation ne vise plus, invisible dans la grille.
+
+Le marqueur « 2 lignes » de la grille est cliquable : il ouvre le tableau et s'y rend. Le
+bouton « Retirer » demande confirmation, et l'écran garde sa place après l'opération.
 
 ## Les objectifs
 

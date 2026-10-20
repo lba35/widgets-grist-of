@@ -142,11 +142,25 @@ var OF = (function () {
   }
 
   /* `apres` est rappelée une fois le document relu, pour rafraîchir l'écran */
+  /* Les tables écrites sont toujours relues, que l'appelant y ait pensé ou
+     non. Les oublier, c'est redessiner l'écran depuis une copie périmée :
+     la valeur est bien partie dans le document, mais la case réaffiche
+     l'ancienne — et l'on croit que rien ne s'enregistre. */
+  function tablesATouchees(actions, demandees) {
+    var liste = (demandees || []).slice();
+    actions.forEach(function (a) {
+      var t = a && a[1];
+      if (typeof t === 'string' && doc.tables[t] && liste.indexOf(t) < 0) liste.push(t);
+    });
+    return liste;
+  }
+
   function appliquer(actions, tablesARelire, apres) {
     if (!actions || !actions.length) return Promise.resolve();
     signaler('Enregistrement…');
+    var aRelire = tablesATouchees(actions, tablesARelire);
     return grist.docApi.applyUserActions(actions)
-      .then(function () { return charger(tablesARelire || []); })
+      .then(function () { return charger(aRelire); })
       .then(function () {
         var h = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
         signaler('Enregistré à ' + h);
@@ -159,14 +173,29 @@ var OF = (function () {
   }
 
   function differer(cle, fn, delai) {
-    clearTimeout(differes[cle]);
-    differes[cle] = setTimeout(function () { delete differes[cle]; fn(); }, delai || 700);
+    if (differes[cle]) clearTimeout(differes[cle].minuteur);
+    differes[cle] = {
+      fn: fn,
+      minuteur: setTimeout(function () { delete differes[cle]; fn(); }, delai || 700)
+    };
   }
   function forcer(cle) {
     if (!differes[cle]) return false;
-    clearTimeout(differes[cle]);
+    clearTimeout(differes[cle].minuteur);
     delete differes[cle];
     return true;
+  }
+  /* Tout ce qui attend part maintenant. À appeler avant de quitter un écran :
+     une frappe encore en attente partirait sinon dans le vide — ou, pire,
+     serait annulée par la première frappe de l'écran suivant si les deux
+     portent la même clé. C'est ce qui faisait « disparaître » des saisies. */
+  function viderDifferes() {
+    Object.keys(differes).forEach(function (cle) {
+      var d = differes[cle];
+      clearTimeout(d.minuteur);
+      delete differes[cle];
+      d.fn();
+    });
   }
 
   /* ---------------------------------------------------- éditeurs de champ */
@@ -577,6 +606,7 @@ var OF = (function () {
     doc: doc, charger: charger, table: table, colonne: colonne, choixDe: choixDe,
     chargerColonnes: chargerColonnes, typeConnu: typeConnu,
     signaler: signaler, appliquer: appliquer, differer: differer, forcer: forcer,
+    viderDifferes: viderDifferes,
     editeur: editeur, optionsRef: optionsRef, listeDeroulante: listeDeroulante,
     sousTable: sousTable,
     echouer: echouer, initialiser: initialiser,

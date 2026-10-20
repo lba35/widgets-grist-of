@@ -165,6 +165,12 @@ p { margin: 0 0 10px; }
 .champ:disabled { color: var(--sourd); border-bottom-style: dotted; }
 .champ.vide-attendu { background: var(--afaire-pale); border-bottom-color: var(--afaire); }
 .champ.erreur { background: var(--alerte-pale); border-color: var(--alerte); }
+/* l'enregistrement se voit dans la case, une seconde */
+@keyframes fondu-enregistre {
+  from { background-color: var(--fait-pale); border-bottom-color: var(--fait); }
+  to { background-color: transparent; }
+}
+.champ.enregistre { animation: fondu-enregistre 1s ease-out; }
 
 /* ------------------------------------------------- formulaire de fiche -- */
 .grille { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -199,6 +205,8 @@ textarea.saisie { min-height: 84px; resize: vertical; line-height: 1.5; }
   text-align: right; white-space: nowrap; border-bottom: 1px solid var(--trait);
 }
 .matrice th.gauche, .matrice td.gauche { text-align: left; }
+/* colonne d'un segment que la fiche ne vise plus, mais qui porte des ventes */
+.matrice th.hors-cible { color: var(--afaire); }
 .matrice th.gauche { padding-left: 0; }
 .matrice td { padding: 3px 10px; border-bottom: 1px solid var(--trait); }
 .matrice tr:last-child td { border-bottom: 0; }
@@ -302,6 +310,12 @@ kbd { padding: 1px 5px; font: inherit; font-size: 11.5px;
   background: transparent; border: 1px solid var(--trait); border-radius: 3px; }
 .lieu:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 .doublon { font-size: 11.5px; color: var(--afaire); }
+/* un signalement sur lequel on peut cliquer pour aller le corriger */
+button.lien { padding: 2px 4px; background: none; border: 1px solid transparent;
+  border-radius: 3px; cursor: pointer; text-decoration: underline;
+  text-underline-offset: 2px; text-decoration-style: dotted; }
+button.lien:hover { border-color: var(--afaire); text-decoration: none; }
+button.lien:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 .outils { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin: 18px 0 26px; font-size: 13px; color: var(--sourd); }
 .coef { width: 62px; padding: 5px 7px; text-align: right; font-variant-numeric: tabular-nums;
@@ -354,7 +368,9 @@ kbd { padding: 1px 5px; font: inherit; font-size: 11.5px;
 .infobulle b { font-variant-numeric: tabular-nums; }
 .infobulle .second { display: block; }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
 @media (max-width: 760px) {
   .corps { flex-direction: column; }
   .rail { flex: 0 0 auto; max-height: 32vh; border-right: 0; border-bottom: 1px solid var(--trait); }
