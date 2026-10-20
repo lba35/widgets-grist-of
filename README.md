@@ -146,6 +146,17 @@ résultat, sessions, heures stagiaires — et chacun n'apparaît que si la colon
 correspondante existe. Si la colonne d'objectif manque, un bouton la crée dans le document,
 en numérique, avec son libellé.
 
+## L'état d'une fiche
+
+La pastille d'une formation dans la liste de gauche, et les trois compteurs du bandeau, ne
+dépendent que des **deux validations du bas de fiche** : `validation_definition` et
+`validation_projections`. Les deux validées, la pastille est verte ; une seule, ocre ; aucune,
+grise. Remplir n'est pas valider : le widget ne décide plus qu'une fiche est complète parce que
+ses cases sont remplies — c'est vous qui le dites.
+
+Ce qui manque encore se dit ailleurs, section par section, par le point ocre du sommaire. La
+section Validation rappelle d'où vient la pastille, pour qu'on sache sur quoi agir.
+
 ## Le sommaire de la fiche
 
 La fiche est longue : un sommaire collant en haut permet de sauter directement aux

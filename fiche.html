@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=14">
+<link rel="stylesheet" href="commun.css?v=15">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=14"></script>
+<script src="commun.js?v=15"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v14';
+var VERSION = 'v15';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -160,21 +160,39 @@ function lieux() {
 /* Une année compte dès qu'elle porte des sessions ; la formation est
    complète quand, pour chacune, les places sont renseignées sur chaque
    segment visé. Sans session, rien n'est en retard : elle n'est pas vendue. */
-function avancement(f) {
-  var segs = segmentsDe(f), attendus = 0, remplis = 0, actives = 0;
+/* L'état d'une fiche est celui que vous lui donnez : les deux validations du
+   bas de fiche, et rien d'autre. Le widget ne décide plus à votre place
+   qu'une fiche est complète parce que ses cases sont remplies — remplir
+   n'est pas valider. Ce qui manque encore se dit ailleurs : par le point
+   ocre du sommaire, section par section. */
+function estValide(valeur) {
+  return /^valid/i.test(OF.texte(valeur).trim());
+}
+
+/* Ce qui manque encore dans les projections : une année qui porte des
+   sessions mais pas de places sur un segment visé. Sert au point ocre du
+   sommaire — pas à l'état de la fiche, qui ne dépend que des validations. */
+function placesManquantes(f) {
+  var segs = segmentsDe(f), manque = false;
+  if (!segs.length) return false;
   OF.anneesTriees().forEach(function (a) {
     var sessions = projDe(a.id, f.id).reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0);
     if (!sessions) return;
-    actives++;
     segs.forEach(function (idSeg) {
-      attendus++;
-      var v = venteDe(a.id, f.id, idSeg);
-      if (v && (v.nb_places || v.nb_groupes)) remplis++;
+      if (!quantite(venteDe(a.id, f.id, idSeg))) manque = true;
     });
   });
-  if (!actives) return { etat: 'vide', remplis: 0, attendus: 0 };
-  if (!segs.length) return { etat: 'sans-segment', remplis: 0, attendus: 0 };
-  return { etat: remplis >= attendus ? 'fait' : 'partiel', remplis: remplis, attendus: attendus };
+  return manque;
+}
+
+function avancement(f) {
+  var d = estValide(f.validation_definition);
+  var p = estValide(f.validation_projections);
+  var n = (d ? 1 : 0) + (p ? 1 : 0);
+  return {
+    etat: n === 2 ? 'fait' : (n === 1 ? 'partiel' : 'vide'),
+    definition: d, projections: p, remplis: n, attendus: 2
+  };
 }
 
 /* ------------------------------------------------------------ écriture -- */
@@ -331,9 +349,8 @@ function reprendre(f, idSource, coefficient) {
 }
 
 /* ---------------------------------------------------------------- rail -- */
-var ETIQUETTES = { fait: 'complète', partiel: 'à compléter', vide: 'sans session',
-  'sans-segment': 'segment à définir' };
-var PASTILLES = { fait: 'p-fait', partiel: 'p-partiel', vide: 'p-vide', 'sans-segment': 'p-partiel' };
+var ETIQUETTES = { fait: 'validée', partiel: '1 sur 2', vide: 'à valider' };
+var PASTILLES = { fait: 'p-fait', partiel: 'p-partiel', vide: 'p-vide' };
 
 function listeFiltree() {
   var q = filtre.trim().toLowerCase();
@@ -353,7 +370,12 @@ var dernierAffiche = null;
 
 function majItem(b, f) {
   var a = avancement(f);
-  var detail = a.etat === 'partiel' ? (a.remplis + '/' + a.attendus) : ETIQUETTES[a.etat];
+  var detail = ETIQUETTES[a.etat];
+  b.title = a.etat === 'partiel'
+    ? (a.definition ? 'Définition validée, projections à valider'
+      : 'Projections validées, définition à valider')
+    : (a.etat === 'fait' ? 'Définition et projections validées'
+      : 'Ni la définition ni les projections ne sont validées');
   b.querySelector('.item-nom').textContent = OF.texte(f.intitule);
   b.querySelector('.item-etat').innerHTML =
     '<span class="pastille ' + PASTILLES[a.etat] + '"></span>' + OF.echappe(detail);
@@ -399,13 +421,14 @@ function rendreRail() {
 }
 
 function rendreAvance() {
-  var n = { fait: 0, partiel: 0, vide: 0, 'sans-segment': 0 };
+  var n = { fait: 0, partiel: 0, vide: 0 };
   OF.formationsTriees().forEach(function (f) { n[avancement(f).etat]++; });
   OF.$('avance').innerHTML =
-    '<span><span class="pastille p-fait"></span><b>' + n.fait + '</b> complètes</span>'
-    + '<span><span class="pastille p-partiel"></span><b>' + (n.partiel + n['sans-segment'])
-      + '</b> à compléter</span>'
-    + '<span><span class="pastille p-vide"></span><b>' + n.vide + '</b> sans session</span>'
+    '<span><span class="pastille p-fait"></span><b>' + n.fait + '</b> '
+      + OF.accord(n.fait, 'validée', 'validées') + '</span>'
+    + '<span><span class="pastille p-partiel"></span><b>' + n.partiel + '</b> à moitié '
+      + OF.accord(n.partiel, 'validée', 'validées') + '</span>'
+    + '<span><span class="pastille p-vide"></span><b>' + n.vide + '</b> à valider</span>'
     /* le numéro de version du fichier servi : si le navigateur ressort une
        vieille page de son cache, il se lit ici d'un coup d'œil */
     + '<span class="version" title="Version de fiche.html actuellement servie">'
@@ -484,11 +507,13 @@ var SECTIONS = [
   { id: 'cout', titre: "Coût de revient d'une session", court: 'Coût', rendu: cout,
     manque: function (f) { return !f.cout_total; } },
   { id: 'projections', titre: 'Projections', court: 'Projections', rendu: projections,
-    manque: function (f) { return avancement(f).etat === 'partiel'; } },
+    manque: placesManquantes },
   { id: 'intra', titre: 'Ventes intra', court: 'Intra', rendu: ventesIntra,
     manque: function () { return false; } },
   { id: 'validation', titre: 'Validation', court: 'Validation', rendu: validation,
-    manque: function (f) { return !!OF.texte(f.alerte_validation); } }
+    manque: function (f) {
+      return !!OF.texte(f.alerte_validation) || avancement(f).etat !== 'fait';
+    } }
 ];
 
 var observateur = null;
@@ -1620,6 +1645,20 @@ function validation(f) {
   }
   etat.textContent = parts.length ? ('Où en est cette fiche — ' + parts.join(', ') + '.') : '';
   if (parts.length) zone.appendChild(etat);
+
+  /* dire d'où vient la pastille de la liste de gauche, pour qu'on sache sur
+     quoi agir quand on veut la faire passer au vert */
+  var source = document.createElement('p');
+  source.className = 'note';
+  var a = avancement(f);
+  source.textContent = 'La pastille de cette formation dans la liste de gauche ne dépend que '
+    + 'de ces deux champs — '
+    + (a.etat === 'fait' ? 'tous deux validés, elle est verte.'
+      : a.etat === 'partiel'
+        ? (a.definition ? 'la définition est validée, les projections non : elle est ocre.'
+          : 'les projections sont validées, la définition non : elle est ocre.')
+        : 'aucun des deux n\'est validé, elle est grise.');
+  zone.appendChild(source);
 
   if (OF.texte(f.alerte_validation)) {
     var al = document.createElement('p');
