@@ -125,6 +125,19 @@ formation ne vise plus, invisible dans la grille.
 Le marqueur « 2 lignes » de la grille est cliquable : il ouvre le tableau et s'y rend. Le
 bouton « Retirer » demande confirmation, et l'écran garde sa place après l'opération.
 
+## Supprimer une formation
+
+En bas de la fiche. Le widget n'écrit pas en dur la liste de ce qui dépend d'une formation —
+elle vieillirait : il interroge les métadonnées du document et retient toute colonne de type
+`Ref:Formations` qui n'est pas une formule. Les colonnes calculées qui désignent une formation
+sont donc ignorées, à juste titre, et une table liée que le widget ne charge même pas est
+trouvée quand même.
+
+L'inventaire compte les lignes table par table et les nomme avant de proposer quoi que ce soit.
+La confirmation porte le total. Les lignes rattachées partent d'abord, la formation ensuite,
+dans une seule opération : aucune référence ne reste pendante. `Ctrl + Z` dans Grist annule le
+tout tant que la page n'a pas été rechargée.
+
 ## Les objectifs
 
 Un objectif ne se calcule pas, il se décide : c'est la seule chose que le pilotage écrit, dans

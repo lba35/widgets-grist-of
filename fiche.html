@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=13">
+<link rel="stylesheet" href="commun.css?v=14">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=13"></script>
+<script src="commun.js?v=14"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v13';
+var VERSION = 'v14';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -590,6 +590,7 @@ function rendreFiche() {
     section.appendChild(s.rendu(f));
     fiche.appendChild(section);
   });
+  fiche.appendChild(zoneSuppression(f));
   fiche.appendChild(aide());
   construireSommaire(sommaire, f);
   /* les cellules calculées sont posées vides par le rendu : on les remplit
@@ -1017,6 +1018,7 @@ function detailProjections(f) {
 function detailVentes(f, annees) {
   var d = document.createElement('details');
   d.className = 'chiffres';
+  d.id = 'detail-ventes';
   d.style.marginTop = '14px';
   d.open = detailOuvert;
   d.addEventListener('toggle', function () { detailOuvert = d.open; });
@@ -1383,6 +1385,172 @@ function bilan(f) {
   return dl;
 }
 
+/* ---------------------------------------------------- supprimer une fiche */
+/* Ce qui dépend d'une formation n'est pas une liste que j'écris à la main :
+   elle vieillirait. On la demande au document — les colonnes de type
+   Ref:Formations qui ne sont pas des formules — et l'on compte avant de
+   proposer quoi que ce soit. */
+var NOM_LIGNES = {
+  Projections: ['ligne de session', 'lignes de session'],
+  Ventes_inter: ['ligne de vente inter', 'lignes de vente inter'],
+  Ventes_intra: ['vente intra', 'ventes intra'],
+  Intervenants_formation: ['profil d\'intervenant', 'profils d\'intervenants'],
+  Besoins_salles: ['besoin de salle', 'besoins de salle'],
+  Vivier: ['ligne de vivier', 'lignes de vivier'],
+  Parcours_formations: ['rattachement à un parcours', 'rattachements à des parcours']
+};
+function nomLignes(table, n) {
+  var m = NOM_LIGNES[table];
+  if (m) return OF.ent(n) + ' ' + (n >= 2 ? m[1] : m[0]);
+  return OF.ent(n) + ' ' + (n >= 2 ? 'lignes' : 'ligne') + ' dans ' + table;
+}
+
+function liensVersFormations() {
+  var liens = [], listes = [];
+  Object.keys(OF.doc.colonnes).forEach(function (t) {
+    if (t === 'Formations' || t.indexOf('_grist') === 0) return;
+    Object.keys(OF.doc.colonnes[t]).forEach(function (c) {
+      var meta = OF.doc.colonnes[t][c];
+      if (meta.formule) return;        // une colonne calculée n'est pas une donnée à supprimer
+      if (meta.type === 'Ref:Formations') liens.push({ table: t, col: c });
+      else if (meta.type === 'RefList:Formations') listes.push(t + ' · ' + c);
+    });
+  });
+  return { liens: liens, listes: listes };
+}
+
+function inventaireSuppression(f) {
+  var d = liensVersFormations();
+  return Promise.all(d.liens.map(function (l) {
+    return grist.docApi.fetchTable(l.table).then(OF.enLignes).then(function (lignes) {
+      return {
+        table: l.table,
+        ids: lignes.filter(function (x) { return x[l.col] === f.id; })
+          .map(function (x) { return x.id; })
+      };
+    }).catch(function () { return { table: l.table, ids: [], echec: true }; });
+  })).then(function (res) {
+    return {
+      tables: res.filter(function (r) { return r.ids.length || r.echec; }),
+      listes: d.listes
+    };
+  });
+}
+
+function zoneSuppression(f) {
+  var zone = document.createElement('div');
+  zone.className = 'zone-danger';
+
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Supprimer cette formation';
+  zone.appendChild(b);
+
+  var panneau = document.createElement('div');
+  panneau.style.display = 'none';
+  zone.appendChild(panneau);
+
+  b.addEventListener('click', function () {
+    if (panneau.style.display !== 'none') {     // refermer
+      panneau.style.display = 'none';
+      panneau.innerHTML = '';
+      b.textContent = 'Supprimer cette formation';
+      return;
+    }
+    b.disabled = true;
+    b.textContent = 'Inventaire en cours…';
+    inventaireSuppression(f).then(function (inv) {
+      b.disabled = false;
+      b.textContent = 'Annuler';
+      panneau.style.display = '';
+      construireConfirmation(panneau, f, inv, b);
+    }).catch(function (e) {
+      b.disabled = false;
+      b.textContent = 'Supprimer cette formation';
+      OF.signaler('Inventaire impossible : ' + (e && e.message ? e.message : e), true);
+    });
+  });
+  return zone;
+}
+
+function construireConfirmation(panneau, f, inv, bAnnuler) {
+  panneau.innerHTML = '';
+  var total = inv.tables.reduce(function (n, t) { return n + t.ids.length; }, 0);
+
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc grave';
+  p.innerHTML = '<b>' + OF.echappe(OF.texte(f.intitule)) + '</b> va être supprimée'
+    + (total ? ', avec tout ce qui s\'y rattache :' : '. Rien d\'autre n\'y est rattaché.');
+  panneau.appendChild(p);
+
+  if (total) {
+    var ul = document.createElement('ul');
+    ul.className = 'a-faire';
+    inv.tables.forEach(function (t) {
+      var li = document.createElement('li');
+      li.textContent = t.echec
+        ? 'Table ' + t.table + ' : illisible, à vérifier à la main'
+        : nomLignes(t.table, t.ids.length);
+      if (t.echec) li.className = 'negatif';
+      ul.appendChild(li);
+    });
+    panneau.appendChild(ul);
+  }
+  if (inv.listes.length) {
+    var l = document.createElement('p');
+    l.className = 'note';
+    l.textContent = 'À vérifier à la main, la formation y figure dans une liste : '
+      + inv.listes.join(', ') + '.';
+    panneau.appendChild(l);
+  }
+
+  var n = document.createElement('p');
+  n.className = 'note';
+  n.textContent = 'Cette liste vient du document lui-même : toute table dont une colonne '
+    + 'pointe vers une formation y est comptée. La suppression reste annulable par '
+    + 'Ctrl + Z dans Grist, tant que la page n\'a pas été rechargée.';
+  panneau.appendChild(n);
+
+  var bOk = document.createElement('button');
+  bOk.type = 'button';
+  bOk.className = 'outil danger';
+  bOk.style.marginTop = '12px';
+  bOk.textContent = total
+    ? 'Confirmer : supprimer la formation et ' + OF.plur(total, 'ligne') + ' '
+      + OF.accord(total, 'liée', 'liées')
+    : 'Confirmer la suppression de la formation';
+  bOk.addEventListener('click', function () {
+    bOk.disabled = true;
+    supprimerFormation(f, inv);
+  });
+  panneau.appendChild(bOk);
+  if (bAnnuler) bAnnuler.focus();
+}
+
+function supprimerFormation(f, inv) {
+  /* les lignes rattachées d'abord, la formation ensuite : une référence ne
+     reste jamais pendante, même si l'opération s'interrompt */
+  var actions = [];
+  inv.tables.forEach(function (t) {
+    if (t.echec) return;
+    t.ids.forEach(function (id) { actions.push(['RemoveRecord', t.table, id]); });
+  });
+  actions.push(['RemoveRecord', 'Formations', f.id]);
+
+  var liste = listeFiltree();
+  var i = liste.findIndex(function (x) { return x.id === f.id; });
+  var suivante = liste[i + 1] || liste[i - 1] || null;
+
+  OF.appliquer(actions, TABLES, function () {
+    courant = null;
+    dernierAffiche = null;
+    if (suivante) ouvrir(suivante.id);
+    else { rendreRail(); rendreFiche(); }
+    OF.signaler('« ' + OF.texte(f.intitule) + ' » supprimée');
+  });
+}
+
 function aide() {
   var p = document.createElement('p');
   p.className = 'aide';
@@ -1550,7 +1718,22 @@ function rafraichir() {
   var frais = formationCourante();
   poser('tot-cout', frais && frais.cout_total ? OF.eur(frais.cout_total) : '—');
 
+  rafraichirDetails(f);
   rendreRail();
+}
+
+/* Les tableaux dépliants montrent les mêmes lignes que la grille : saisir une
+   place dans la grille doit s'y voir aussitôt. On les reconstruit — sauf si
+   le curseur y est, auquel cas c'est de là que vient la saisie et le
+   rendreTout qui suit s'en chargera. */
+function rafraichirDetails(f) {
+  [['detail-sessions', function () { return detailProjections(f); }],
+   ['detail-ventes', function () { return detailVentes(f, OF.anneesTriees()); }]
+  ].forEach(function (paire) {
+    var vieux = OF.$(paire[0]);
+    if (!vieux || !vieux.parentNode || vieux.contains(document.activeElement)) return;
+    vieux.parentNode.replaceChild(paire[1](), vieux);
+  });
 }
 
 /* Après une écriture, on reconstruit la fiche — mais on rend sa place au
