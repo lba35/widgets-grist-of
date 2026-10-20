@@ -163,6 +163,28 @@ par session que calcule le document.
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
 
+## Hypothèses de remplissage
+
+Deux taux, posés dans le pilotage et enregistrés dans `Parametres` sous les clés
+`remplissage_pessimiste` et `remplissage_optimiste` : tout le document en dispose, pas seulement
+cet écran. Le tableau donne les trois colonnes — basse, projeté, haute — et la fourchette se
+lit par année en bandes, le trait marquant le remplissage projeté.
+
+Ce qui varie et ce qui ne varie pas, d'après les formules du document :
+
+| Ce que le taux fait varier | Ce qu'il laisse intact |
+|---|---|
+| Ventes inter à la place : `nb_places × prix × jours` | Ventes inter au groupe : le groupe est acheté entier |
+| | Ventes intra : un groupe vendu à un établissement |
+| | Les coûts : engagés par les sessions ouvertes, pas par les inscrits |
+
+Les sièges déjà pris par les ventes au groupe sont **retirés de la capacité** avant d'appliquer
+le taux. Sans cette soustraction, l'hypothèse haute revendrait des places déjà vendues.
+
+Deux garde-fous : le total recalculé est confronté à la recette du document, et l'écart est
+signalé — une fourchette assise sur une assiette incomplète ne vaut rien ; et si le remplissage
+projeté tombe hors de la fourchette, l'écran le dit, car elle n'encadre alors plus rien.
+
 ## Les objectifs
 
 Un objectif ne se calcule pas, il se décide : c'est la seule chose que le pilotage écrit, dans

@@ -282,6 +282,62 @@ var G = (function () {
     return a.svg;
   }
 
+  /* ----------------------------------------------------- fourchettes ---- */
+  /* Une bande du pessimiste à l'optimiste, et un trait sur le projeté. Montrer
+     l'incertitude comme une bande plutôt que trois barres côte à côte évite de
+     donner aux trois hypothèses le même poids : il n'y en a qu'une qui est
+     chiffrée, les deux autres bornent.
+     conf = { larg, haut, valeurs:[{libelle, bas, haut, central, bulle}], … } */
+  function fourchettes(conf) {
+    var vals = conf.valeurs;
+    var bornes = [];
+    vals.forEach(function (d) {
+      [d.bas, d.haut, d.central].forEach(function (v) {
+        if (v || v === 0) bornes.push(v);
+      });
+    });
+    var e = echelle(Math.min.apply(null, bornes.concat([0])),
+      Math.max.apply(null, bornes.concat([0])), 4);
+    var a = axes({
+      larg: conf.larg, haut: conf.haut, echelle: e, n: vals.length,
+      formatY: conf.formatY || compact, unite: conf.unite, description: conf.description
+    });
+    var larg = Math.min(56, Math.max(10, a.bande - 24));
+
+    vals.forEach(function (d, i) {
+      var x = a.bx(i) + (a.bande - larg) / 2;
+      var g = el('g');
+      if (d.bas !== null && d.haut !== null) {
+        var y1 = a.y(Math.max(d.bas, d.haut)), y2 = a.y(Math.min(d.bas, d.haut));
+        var h = Math.max(2, y2 - y1);
+        g.appendChild(el('rect', {
+          x: x, y: y1, width: larg, height: h, rx: Math.min(4, larg / 2),
+          fill: 'var(--degrade-1)'
+        }));
+      }
+      if (d.central || d.central === 0) {
+        var yc = a.y(d.central);
+        g.appendChild(el('line', {
+          x1: x - 4, x2: x + larg + 4, y1: yc, y2: yc,
+          stroke: 'var(--encre)', 'stroke-width': 2, 'stroke-linecap': 'round'
+        }));
+        /* l'étiquette se pose sur le trait, pas en haut de la bande : le
+           projeté peut très bien tomber hors de la fourchette, et l'étiquette
+           annoncerait alors une valeur que la bande ne contient pas */
+        g.appendChild(txt(x + larg / 2, yc - 8, (conf.formatVal || compact)(d.central),
+          { ancre: 'middle', couleur: 'var(--encre)', gras: 600, taille: 11.5 }));
+      }
+      a.etiquetteX(i, d.libelle);
+      var cible = el('rect', { x: a.bx(i), y: a.m.h, width: a.bande, height: a.ph,
+        fill: 'transparent' });
+      titreSvg(cible, d.libelle + ' : ' + (conf.formatVal || compact)(d.central));
+      if (d.bulle) survol(cible, d.bulle);
+      g.appendChild(cible);
+      a.svg.appendChild(g);
+    });
+    return a.svg;
+  }
+
   /* ------------------------------------------- barres horizontales ------ */
   /* Des catégories nommées — des formations — se classent et se lisent en
      lignes : le nom tient à gauche sans basculer à 45°, et l'ordre est
@@ -502,7 +558,7 @@ var G = (function () {
 
   return {
     barres: barres, empilees: empilees, ligne: ligne,
-    barresHorizontales: barresHorizontales,
+    barresHorizontales: barresHorizontales, fourchettes: fourchettes,
     figure: figure, legende: legende, chiffres: chiffres,
     compact: compact, echelle: echelle,
     oublier: oublier, redessiner: redessiner

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=16">
+<link rel="stylesheet" href="commun.css?v=17">
 <style>
   .onglets { display: flex; gap: 2px; flex: 0 0 auto; }
   .onglet { padding: 7px 14px; background: none; border: 1px solid transparent;
@@ -57,8 +57,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=16"></script>
-<script src="graphes.js?v=16"></script>
+<script src="commun.js?v=17"></script>
+<script src="graphes.js?v=17"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -77,7 +77,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v16';
+var VERSION = 'v17';
 
 var TABLES = ['Annees', 'Formations', 'Intervenants', 'Intervenants_formation', 'Vivier',
   'Projections', 'Ventes_inter', 'Ventes_intra', 'Parametres', 'Gestionnaire', 'Domaines', 'Charge'];
@@ -454,6 +454,7 @@ function pageProjection() {
   }
 
   bandeauAnnee(zone);
+  hypotheses(zone, annees);
   rentabilite(zone);
   grapheRecettes(zone, annees);
   grapheResultat(zone, annees);
@@ -505,6 +506,271 @@ function bandeauAnnee(zone) {
     recruter ? 'negatif' : ''));
 
   zone.appendChild(t);
+}
+
+/* -------------------------------------------- hypothèses de remplissage */
+/* Ce qu'un taux de remplissage fait varier, et ce qu'il ne fait pas varier :
+   - les ventes inter à la place suivent le remplissage ;
+   - une vente au groupe est achetée entière, son prix ne bouge pas, et les
+     sièges qu'elle occupe ne sont plus à vendre ;
+   - une vente intra est un groupe vendu à un établissement : elle ne bouge
+     pas non plus ;
+   - le coût est engagé par les sessions ouvertes, il ne bouge jamais.
+   Oublier de retirer les sièges déjà pris par les groupes inventerait de la
+   recette dans l'hypothèse haute. */
+function assiette(idA) {
+  var formations = OF.parId(OF.table('Formations'));
+  var proj = OF.table('Projections').filter(function (p) { return p.annee === idA; });
+  var intra = OF.table('Ventes_intra').filter(function (v) { return v.annee === idA; });
+
+  var capacite = proj.reduce(function (n, p) {
+    var f = formations[p.formation];
+    return n + (p.capacite || (p.nb_sessions || 0) * ((f && f.effectif_max) || 0));
+  }, 0);
+
+  var placesVendues = 0, recettePlaces = 0, recetteFixe = 0, placesGroupes = 0;
+  OF.table('Ventes_inter').forEach(function (v) {
+    if (v.annee !== idA) return;
+    if (/groupe/i.test(OF.texte(v.base))) {
+      recetteFixe += v.recette || 0;
+      placesGroupes += v.places || 0;
+    } else {
+      recettePlaces += v.recette || 0;
+      placesVendues += v.nb_places || 0;
+    }
+  });
+  intra.forEach(function (v) { recetteFixe += v.recette || 0; });
+
+  var cout = proj.reduce(function (n, p) { return n + (p.cout || 0); }, 0)
+    + intra.reduce(function (n, v) { return n + (v.cout || 0); }, 0);
+  var vendable = Math.max(0, capacite - placesGroupes);
+
+  return {
+    capacite: capacite, vendable: vendable, placesGroupes: placesGroupes,
+    placesVendues: placesVendues, recettePlaces: recettePlaces,
+    recetteFixe: recetteFixe, cout: cout,
+    prixPlace: placesVendues ? recettePlaces / placesVendues : 0,
+    taux: vendable ? placesVendues / vendable : 0
+  };
+}
+
+function auTaux(a, taux) {
+  var places = Math.round(a.vendable * taux);
+  var recette = places * a.prixPlace + a.recetteFixe;
+  return { taux: taux, places: places, recette: recette, resultat: recette - a.cout };
+}
+
+function ecrireParametre(cle, valeur) {
+  var p = OF.table('Parametres').filter(function (x) { return x.cle === cle; })[0];
+  var action = p
+    ? ['UpdateRecord', 'Parametres', p.id, { valeur: valeur }]
+    : ['AddRecord', 'Parametres', null, { cle: cle, valeur: valeur }];
+  return OF.appliquer([action], TABLES, rendre);
+}
+
+function champTaux(cle, placeholder, libelle) {
+  var el = document.createElement('input');
+  el.className = 'champ';
+  el.id = 'taux-' + cle;
+  el.inputMode = 'decimal';
+  el.placeholder = placeholder;
+  el.setAttribute('aria-label', libelle);
+  var p = OF.table('Parametres').filter(function (x) { return x.cle === cle; })[0];
+  var v = p ? p.valeur : null;
+  el.value = (v || v === 0) ? Math.round(v * 100) : '';
+  var origine = el.value;
+  el.addEventListener('change', function () {
+    var brut = el.value.trim();
+    if (brut === '' || brut === origine) return;
+    var n = OF.nombre(brut);
+    if (n <= 0 || n > 100) {
+      el.classList.add('erreur');
+      OF.signaler('Un taux de remplissage se situe entre 1 et 100 %', true);
+      return;
+    }
+    el.classList.remove('erreur');
+    focusARendre = el.id;
+    ecrireParametre(cle, n / 100).catch(function () {
+      el.classList.add('erreur'); focusARendre = null;
+    });
+  });
+  el.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') { el.value = origine; el.blur(); }
+    if (ev.key === 'Enter') el.blur();
+  });
+  return el;
+}
+
+function hypotheses(zone, annees) {
+  var a = assiette(idAnnee);
+  var annee = OF.parId(OF.table('Annees'))[idAnnee];
+  if (!a.capacite) return;
+
+  zone.appendChild(titre('Hypothèses de remplissage'));
+
+  var bas = parametre('remplissage_pessimiste');
+  var haut = parametre('remplissage_optimiste');
+
+  var reglages = document.createElement('div');
+  reglages.className = 'outils';
+  reglages.appendChild(document.createTextNode('Hypothèse basse'));
+  reglages.appendChild(champTaux('remplissage_pessimiste',
+    String(Math.max(5, Math.round(a.taux * 100) - 15)), 'Taux de remplissage pessimiste'));
+  reglages.appendChild(document.createTextNode('%  ·  hypothèse haute'));
+  reglages.appendChild(champTaux('remplissage_optimiste',
+    String(Math.min(100, Math.round(a.taux * 100) + 15)), 'Taux de remplissage optimiste'));
+  var fin = document.createElement('span');
+  fin.textContent = '%  ·  projeté ' + Math.round(100 * a.taux) + ' %';
+  reglages.appendChild(fin);
+  zone.appendChild(reglages);
+
+  if (!bas && !haut) {
+    var vide = document.createElement('p');
+    vide.className = 'note';
+    vide.textContent = 'Posez au moins un des deux taux pour voir la fourchette. Ils sont '
+      + 'enregistrés dans la table Parametres, sous les clés remplissage_pessimiste et '
+      + 'remplissage_optimiste : tout le document en dispose, pas seulement cet écran.';
+    zone.appendChild(vide);
+    return;
+  }
+  if (bas && haut && bas > haut) {
+    var ordre = document.createElement('p');
+    ordre.className = 'alerte-bloc';
+    ordre.textContent = 'L\'hypothèse basse dépasse l\'hypothèse haute : les deux sont '
+      + 'affichées telles quelles, mais la fourchette n\'a plus de sens.';
+    zone.appendChild(ordre);
+  }
+  /* une fourchette qui ne contient pas le projeté n'encadre rien : autant le
+     dire, c'est en général le signe que les taux ont été posés avant la
+     saisie et qu'ils ne sont plus à jour */
+  if ((bas && a.taux < bas) || (haut && a.taux > haut)) {
+    var dehors = document.createElement('p');
+    dehors.className = 'alerte-bloc';
+    dehors.textContent = 'Le remplissage projeté, ' + Math.round(100 * a.taux)
+      + ' %, est ' + (bas && a.taux < bas
+        ? 'déjà au-dessous de l\'hypothèse basse (' + Math.round(100 * bas) + ' %)'
+        : 'déjà au-dessus de l\'hypothèse haute (' + Math.round(100 * haut) + ' %)')
+      + ' : la fourchette n\'encadre pas la projection.';
+    zone.appendChild(dehors);
+  }
+
+  var colonnes = [];
+  if (bas) colonnes.push({ nom: 'Basse', h: auTaux(a, bas) });
+  colonnes.push({ nom: 'Projeté', h: auTaux(a, a.taux), reel: true });
+  if (haut) colonnes.push({ nom: 'Haute', h: auTaux(a, haut) });
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche"></th>'
+    + colonnes.map(function (c) { return '<th>' + OF.echappe(c.nom) + '</th>'; }).join('')
+    + '</tr></thead>';
+  var corps = document.createElement('tbody');
+  var ligne = function (libelle, lire, fort) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = libelle;
+    if (fort) td.style.fontWeight = '600';
+    tr.appendChild(td);
+    colonnes.forEach(function (c) {
+      var cel = document.createElement('td');
+      cel.className = 'calcul';
+      var v = lire(c);
+      cel.textContent = v.texte;
+      if (fort) { cel.style.fontWeight = '600'; cel.style.color = 'var(--encre)'; }
+      if (v.classe) cel.classList.add(v.classe);
+      tr.appendChild(cel);
+    });
+    corps.appendChild(tr);
+  };
+
+  ligne('Taux de remplissage', function (c) {
+    return { texte: Math.round(100 * c.h.taux) + ' %' };
+  });
+  ligne('Places vendues à la place', function (c) { return { texte: OF.ent(c.h.places) }; });
+  ligne('Recettes', function (c) { return { texte: OF.eur(c.h.recette) }; }, true);
+  ligne('Coûts', function (c) { return { texte: OF.eur(a.cout) }; });
+  ligne('Résultat', function (c) {
+    return { texte: OF.eur(c.h.resultat),
+      classe: c.h.resultat > 0 ? 'positif' : (c.h.resultat < 0 ? 'negatif' : '') };
+  }, true);
+  if (annee && annee.objectif_ca) {
+    ligne('Écart à l\'objectif', function (c) {
+      var e = c.h.recette - annee.objectif_ca;
+      return { texte: (e >= 0 ? '+' : '') + OF.eur(e), classe: e >= 0 ? 'positif' : 'negatif' };
+    });
+  }
+  t.appendChild(corps);
+  zone.appendChild(defilant(t));
+
+  /* la fourchette sur toutes les années */
+  if (bas && haut && annees.length > 1) {
+    var valeurs = annees.map(function (an) {
+      var ai = assiette(an.id);
+      if (!ai.capacite) return { libelle: String(an.annee), bas: null, haut: null, central: null };
+      var b = auTaux(ai, bas), o = auTaux(ai, haut), p = auTaux(ai, ai.taux);
+      return {
+        libelle: String(an.annee), bas: b.resultat, haut: o.resultat, central: p.resultat,
+        bulle: '<b>' + an.annee + '</b> — projeté ' + OF.eur(p.resultat)
+          + '<span class="second">à ' + Math.round(100 * bas) + ' % : ' + OF.eur(b.resultat)
+          + '</span><span class="second">à ' + Math.round(100 * haut) + ' % : '
+          + OF.eur(o.resultat) + '</span>'
+          + '<span class="second">coûts engagés ' + OF.eur(ai.cout) + '</span>'
+      };
+    });
+    G.figure(zone, {
+      titre: 'Résultat selon le remplissage, par année',
+      sous: 'La bande va de ' + Math.round(100 * bas) + ' % à ' + Math.round(100 * haut)
+        + ' % de remplissage ; le trait marque le remplissage projeté.',
+      haut: 215,
+      chiffres: G.chiffres('Les chiffres',
+        ['', 'Hypothèse basse', 'Projeté', 'Hypothèse haute'],
+        valeurs.map(function (v) {
+          return [v.libelle,
+            v.bas === null ? '—' : OF.eur(v.bas),
+            v.central === null ? '—' : OF.eur(v.central),
+            v.haut === null ? '—' : OF.eur(v.haut)];
+        })),
+      dessin: function (larg, hauteur) {
+        return G.fourchettes({
+          larg: larg, haut: hauteur, valeurs: valeurs, unite: 'en €',
+          description: 'Résultat de chaque année entre l\'hypothèse basse et l\'hypothèse '
+            + 'haute de remplissage.'
+        });
+      }
+    });
+  }
+
+  var n = document.createElement('p');
+  n.className = 'note';
+  n.innerHTML = 'Seules les <b>ventes inter à la place</b> suivent le remplissage. Une vente au '
+    + 'groupe est achetée entière : son prix ne bouge pas, et les '
+    + OF.plur(a.placesGroupes, 'siège') + ' ainsi '
+    + OF.accord(a.placesGroupes, 'occupé', 'occupés') + ' ne sont plus à vendre — ils sont '
+    + 'retirés de la capacité avant d\'appliquer le taux. Les ventes intra ne bougent pas non '
+    + 'plus. Et le coût ne bouge jamais : il est engagé par les sessions ouvertes, pas par les '
+    + 'inscrits. Sur ' + OF.plur(a.capacite, 'place') + ' '
+    + OF.accord(a.capacite, 'ouverte', 'ouvertes') + ', '
+    + OF.plur(a.vendable, 'place') + ' ' + OF.accord(a.vendable, 'reste', 'restent')
+    + ' donc ' + OF.accord(a.vendable, 'sensible', 'sensibles') + ' au remplissage.';
+  zone.appendChild(n);
+
+  /* Le total recalculé ici doit retomber sur la recette du document. S'il
+     s'en écarte, c'est que des lignes ne se rattachent pas comme on le croit,
+     et toute la fourchette repose alors sur une assiette fausse. */
+  if (annee && (annee.recettes || annee.recettes === 0)) {
+    var calcule = auTaux(a, a.taux).recette;
+    if (Math.abs(calcule - annee.recettes) > 1) {
+      var ecart = document.createElement('p');
+      ecart.className = 'alerte-bloc';
+      ecart.innerHTML = 'À vérifier : le total recalculé ici, <b>' + OF.eur(calcule)
+        + '</b>, ne retombe pas sur la recette que le document donne pour '
+        + annee.annee + ', <b>' + OF.eur(annee.recettes) + '</b>. Une ligne de vente porte '
+        + 'sans doute une année sans projection, ou une projection sans vente. Tant que '
+        + 'l\'écart subsiste, la fourchette ci-dessus repose sur une assiette incomplète.';
+      zone.appendChild(ecart);
+    }
+  }
 }
 
 /* ------------------------------------------------------- rentabilité --- */
