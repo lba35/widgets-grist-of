@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=15">
+<link rel="stylesheet" href="commun.css?v=16">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=15"></script>
+<script src="commun.js?v=16"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v15';
+var VERSION = 'v16';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -841,6 +841,7 @@ function cout(f) {
   });
   t.appendChild(corps);
   zone.appendChild(t);
+  zone.appendChild(pointMort(f));
 
   var n = document.createElement('p');
   n.className = 'note';
@@ -850,6 +851,128 @@ function cout(f) {
     + "global de l'organisme. Le tarif plancher est le prix en dessous duquel une session ne "
     + 'couvre plus son propre coût.';
   zone.appendChild(n);
+  return zone;
+}
+
+/* ---------------------------------------------------------- point mort -- */
+/* Dans ce document, animation et support sont facturés par session : le coût
+   d'une session ne dépend ni du nombre de sessions ni du nombre d'inscrits.
+   Ouvrir des sessions ne rend donc jamais une formation rentable — cela
+   multiplie seulement le résultat d'une session, quel qu'en soit le signe.
+   Le seuil, lui, existe : c'est le nombre de places qu'une session doit
+   vendre pour se payer. */
+function pointMort(f) {
+  var zone = document.createElement('div');
+  zone.style.marginTop = '16px';
+  var cout = f.cout_total || 0;
+  if (!cout) return zone;
+
+  /* Le prix d'une place : celui qu'on vend réellement si des ventes existent,
+     sinon le tarif de référence que le document calcule. On dit lequel. */
+  var an = OF.anneePilotee();
+  var inter = an ? projDe(an.id, f.id) : [];
+  var intra = an ? OF.table('Ventes_intra').filter(function (v) {
+    return v.formation === f.id && v.annee === an.id;
+  }) : [];
+  var lignes = inter.concat(intra);        // une session intra coûte autant qu'une inter
+  var places = lignes.reduce(function (n, p) { return n + (p.places || 0); }, 0);
+  var recette = lignes.reduce(function (n, p) { return n + (p.recette || 0); }, 0);
+  var sessions = lignes.reduce(function (n, p) { return n + (p.nb_sessions || 0); }, 0);
+  var reference = inter.reduce(function (n, p) { return Math.max(n, p.prix_reference || 0); }, 0);
+
+  var prixPlace = 0, source = '';
+  if (places && recette) {
+    prixPlace = recette / places;
+    source = 'Au prix moyen réellement projeté en ' + an.annee;
+  } else if (reference && f.nb_jours) {
+    prixPlace = reference * f.nb_jours;
+    source = 'Au tarif de référence du document';
+  }
+
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.style.maxWidth = '78ch';
+  if (!prixPlace) {
+    p.textContent = 'Point mort non calculable : ni vente projetée, ni tarif de référence pour '
+      + 'cette formation. Une session coûte ' + OF.eur(cout) + ' ; il faut un prix de place '
+      + 'pour savoir combien en vendre.';
+    zone.appendChild(p);
+    return zone;
+  }
+
+  var seuil = Math.ceil(cout / prixPlace);
+  var capacite = f.effectif_max || 0;
+  var moyenne = sessions ? places / sessions : 0;
+  var impossible = capacite && seuil > capacite;
+
+  var h = document.createElement('h3');
+  h.textContent = 'À partir de combien de places une session se paie';
+  zone.appendChild(h);
+
+  p.innerHTML = 'Une session coûte <b>' + OF.eur(cout) + '</b>. ' + OF.echappe(source)
+    + ' — <b>' + OF.eur(prixPlace) + ' la place</b> — elle se paie à partir de <b>'
+    + OF.plur(seuil, 'place') + '</b>'
+    + (capacite ? ' sur ' + OF.ent(capacite) + ', soit ' + Math.round(100 * seuil / capacite)
+      + ' % de remplissage' : '') + '.'
+    + (sessions ? ' Les projections ' + an.annee + ' vendent en moyenne <b>'
+      + OF.dec(moyenne) + '</b> ' + OF.accord(moyenne, 'place', 'places') + ' par session.' : '');
+  zone.appendChild(p);
+
+  /* L'échelle va jusqu'au plus grand des trois : la capacité, le point mort,
+     ce qui est vendu. Écraser un point mort hors capacité contre le bord
+     droit le ferait paraître atteignable — il ne l'est pas. */
+  if (capacite) {
+    var haut = Math.max(capacite, seuil, Math.ceil(moyenne)) || 1;
+    var pc = function (v) { return 100 * v / haut; };
+    var place = function (x, texte, classe) {
+      var style = x > 82 ? 'right:0' : (x < 12 ? 'left:0' : 'left:' + x + '%');
+      var centre = (x > 82 || x < 12) ? ' sans-centre' : '';
+      return '<span class="pm-marque' + (classe ? ' ' + classe : '') + centre
+        + '" style="' + style + '">' + texte + '</span>';
+    };
+
+    var jauge = document.createElement('div');
+    jauge.className = 'point-mort';
+    jauge.innerHTML = '<div class="pm-rail">'
+      + '<span class="pm-rempli' + (moyenne >= seuil ? ' ok' : '') + '" style="width:'
+        + pc(moyenne) + '%"></span>'
+      + (seuil > capacite
+        ? '<span class="pm-capacite" style="left:' + pc(capacite) + '%"></span>' : '')
+      + '<span class="pm-seuil" style="left:' + pc(seuil) + '%"></span>'
+      + '</div>'
+      + '<div class="pm-ligne">' + place(pc(seuil), 'point mort ' + OF.ent(seuil)) + '</div>'
+      + '<div class="pm-ligne pm-bornes"><span>0</span>'
+      + (seuil > capacite
+        ? place(pc(capacite), OF.ent(capacite) + ' places, session pleine', 'pm-sourd') : '')
+      + '<span class="pm-fin">' + OF.ent(haut) + ' places par session</span></div>';
+    zone.appendChild(jauge);
+  }
+
+  var verdict = document.createElement('p');
+  verdict.className = 'alerte-bloc' + (impossible ? ' grave' : '');
+  if (impossible) {
+    verdict.innerHTML = 'Même pleine, une session ne couvre pas son coût : il manque <b>'
+      + OF.eur(cout - capacite * prixPlace) + '</b> par session. À ce prix, aucun volume n\'y '
+      + 'changera rien — il faut relever le tarif, alléger l\'animation, ou assumer la perte.';
+  } else if (!sessions) {
+    verdict.className = 'note';
+    verdict.textContent = 'Aucune session projetée sur l\'année pilotée : le seuil ci-dessus est '
+      + 'théorique tant que rien n\'est vendu.';
+  } else if (moyenne >= seuil) {
+    verdict.style.background = 'var(--fait-pale)';
+    verdict.style.borderLeftColor = 'var(--fait)';
+    /* l'écart en euros se calcule sur la moyenne réelle, pas sur le seuil
+       arrondi : arrondir deux fois donnerait un chiffre faux */
+    verdict.innerHTML = 'Au-dessus du point mort : chaque session dégage <b>'
+      + OF.eur(moyenne * prixPlace - cout) + '</b> au-delà de ses coûts directs.';
+  } else {
+    verdict.innerHTML = 'Sous le point mort : il manque <b>'
+      + OF.plur(Math.ceil(seuil - moyenne), 'place') + '</b> par session, soit <b>'
+      + OF.eur(cout - moyenne * prixPlace) + '</b>. '
+      + 'Ouvrir des sessions supplémentaires ne corrigera rien : le coût d\'une session ne '
+      + 'baisse pas avec le volume, c\'est la perte qui se multiplie.';
+  }
+  zone.appendChild(verdict);
   return zone;
 }
 

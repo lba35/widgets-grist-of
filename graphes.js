@@ -282,6 +282,77 @@ var G = (function () {
     return a.svg;
   }
 
+  /* ------------------------------------------- barres horizontales ------ */
+  /* Des catégories nommées — des formations — se classent et se lisent en
+     lignes : le nom tient à gauche sans basculer à 45°, et l'ordre est
+     l'information. conf = { larg, valeurs:[{libelle, valeur, bulle}],
+     formatVal, polarite, largLibelle } */
+  function barresHorizontales(conf) {
+    var vals = conf.valeurs;
+    var hLigne = 26, hBarre = 13;
+    var mg = Math.min(conf.largLibelle || 230, Math.round(conf.larg * 0.38));
+    var md = 78, mh = 6;
+    var pw = Math.max(40, conf.larg - mg - md);
+    var haut = mh * 2 + hLigne * vals.length;
+
+    var bornes = vals.map(function (d) { return d.valeur || 0; }).concat([0]);
+    var min = Math.min.apply(null, bornes), max = Math.max.apply(null, bornes);
+    if (max === min) max = min + 1;
+    var x = function (v) { return mg + (v - min) / (max - min) * pw; };
+    var x0 = x(0);
+
+    var svg = el('svg', {
+      width: conf.larg, height: haut, viewBox: '0 0 ' + conf.larg + ' ' + haut,
+      role: 'img', 'aria-label': conf.description || ''
+    });
+    svg.appendChild(el('line', {
+      x1: Math.round(x0) + 0.5, x2: Math.round(x0) + 0.5, y1: mh, y2: haut - mh,
+      stroke: 'var(--trait-fort)', 'stroke-width': 1
+    }));
+
+    vals.forEach(function (d, i) {
+      var v = d.valeur || 0;
+      var yc = mh + hLigne * i + hLigne / 2;
+      var g = el('g');
+      var couleur = conf.polarite
+        ? (v < 0 ? 'var(--neg)' : 'var(--pos)')
+        : (conf.couleur || 'var(--serie-1)');
+
+      /* la barre part de zéro et s'arrondit du côté de la valeur */
+      var xv = x(v), gauche = Math.min(x0, xv), larg = Math.abs(xv - x0);
+      var r = Math.min(4, larg);
+      if (larg > 0.5) {
+        g.appendChild(el('path', {
+          d: v >= 0
+            ? 'M' + gauche + ',' + (yc - hBarre / 2) + 'h' + (larg - r)
+              + 'q' + r + ',0 ' + r + ',' + r + 'v' + (hBarre - 2 * r)
+              + 'q0,' + r + ' ' + (-r) + ',' + r + 'H' + gauche + 'Z'
+            : 'M' + (gauche + r) + ',' + (yc - hBarre / 2) + 'h' + (larg - r)
+              + 'v' + hBarre + 'H' + (gauche + r)
+              + 'q' + (-r) + ',0 ' + (-r) + ',' + (-r) + 'v' + (-(hBarre - 2 * r))
+              + 'q0,' + (-r) + ' ' + r + ',' + (-r) + 'Z',
+          fill: couleur
+        }));
+      }
+
+      /* un nom trop long déborderait sur les barres : on le coupe, et le nom
+         entier reste dans l'infobulle de la ligne */
+      var place = Math.max(6, Math.floor((mg - 14) / 6.3));
+      var court = d.libelle.length > place ? d.libelle.slice(0, place - 1) + '…' : d.libelle;
+      g.appendChild(txt(mg - 10, yc + 4, court, { ancre: 'end', couleur: 'var(--encre)' }));
+      g.appendChild(txt(conf.larg - 6, yc + 4, (conf.formatVal || compact)(v),
+        { ancre: 'end', couleur: 'var(--encre)', gras: 600, taille: 11.5 }));
+
+      var cible = el('rect', { x: 0, y: mh + hLigne * i, width: conf.larg, height: hLigne,
+        fill: 'transparent' });
+      titreSvg(cible, d.libelle + ' : ' + (conf.formatVal || compact)(v));
+      if (d.bulle) survol(cible, d.bulle);
+      g.appendChild(cible);
+      svg.appendChild(g);
+    });
+    return svg;
+  }
+
   /* -------------------------------------------------------- ligne ------- */
   /* conf = { larg, haut, valeurs:[{libelle, valeur, bulle}], formatY, formatVal } */
   function ligne(conf) {
@@ -431,6 +502,7 @@ var G = (function () {
 
   return {
     barres: barres, empilees: empilees, ligne: ligne,
+    barresHorizontales: barresHorizontales,
     figure: figure, legende: legende, chiffres: chiffres,
     compact: compact, echelle: echelle,
     oublier: oublier, redessiner: redessiner

@@ -138,6 +138,31 @@ La confirmation porte le total. Les lignes rattachées partent d'abord, la forma
 dans une seule opération : aucune référence ne reste pendante. `Ctrl + Z` dans Grist annule le
 tout tant que la page n'a pas été rechargée.
 
+## Rentabilité et point mort
+
+Dans ce document, animation et support sont facturés **par session** : `cout_session` ne dépend
+ni du nombre de sessions ni du nombre d'inscrits, et `Projections.cout` vaut
+`nb_sessions × cout_session`. Le signe du résultat d'une formation ne change donc jamais avec le
+volume — ouvrir des sessions multiplie le résultat d'une session, quel qu'en soit le signe. Il
+n'existe pas de nombre de sessions à partir duquel une formation devient rentable.
+
+Le seuil existe ailleurs : **en places vendues par session**.
+
+```
+places au point mort = coût d'une session ÷ prix d'une place
+                     = effectif_max × tarif_plancher_jour ÷ prix_jour
+```
+
+La fiche l'affiche sous le coût de revient, avec une jauge graduée jusqu'au plus grand des
+trois — capacité, point mort, moyenne vendue — pour qu'un point mort hors capacité ne paraisse
+pas atteignable. Le prix de la place est celui réellement projeté quand des ventes existent,
+sinon le tarif de référence du document ; la phrase dit lequel. Les écarts en euros se calculent
+sur la moyenne réelle et non sur le seuil arrondi : ils retombent exactement sur le `resultat`
+par session que calcule le document.
+
+Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
+pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
+
 ## Les objectifs
 
 Un objectif ne se calcule pas, il se décide : c'est la seule chose que le pilotage écrit, dans
