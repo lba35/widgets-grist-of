@@ -8,11 +8,15 @@ dans Grist.
 |---|---|
 | `index.html` | Page catalogue, qui affiche l'URL à coller pour chaque widget |
 | `fiche.html` | Tout ce qui concerne une formation : définition, public, ressources, coût, projections, ventes intra, validation |
-| `charge.html` | Vivier d'intervenants, profil par profil, et besoin de recrutement |
-| `pilotage.html` | Les deux tableaux de bord : recrutement et projection pluriannuelle |
+| `charge.html` | Les moyens à réunir, en trois volets : vivier d'intervenants, recrutement, occupation des salles |
+| `pilotage.html` | La trajectoire commerciale pluriannuelle : recettes, résultat, hypothèses, scénarios, objectifs |
 | `commun.css` | Jetons visuels et composants partagés |
 | `commun.js` | Plomberie Grist, métadonnées de colonnes, éditeurs, écriture différée |
-| `graphes.js` | Les graphiques du pilotage, dessinés en SVG, sans bibliothèque |
+| `graphes.js` | Les graphiques du pilotage et de la charge, dessinés en SVG, sans bibliothèque |
+
+Le partage entre les deux tableaux de bord suit une ligne simple : **le pilotage répond à
+« combien allons-nous vendre ? », la charge répond à « avec quels moyens ? »**. Le recrutement
+et les salles sont des moyens, donc ils sont dans la charge, à côté du vivier qui les produit.
 
 ## Mise en place
 
@@ -73,15 +77,17 @@ de moins à charger depuis le réseau du CHU, et rien qui puisse disparaître d'
 
 ## Les graphiques
 
-Quatre figures dans l'onglet Projection, et une dans l'onglet Recrutement :
+Cinq figures dans le pilotage, deux dans la charge :
 
-| Figure | Ce qu'elle montre |
-|---|---|
-| Recettes projetées par année | Les recettes en barres, l'objectif de l'année en trait pointillé sur la même échelle |
-| Résultat sur coûts directs | Une barre par année, au-dessus ou au-dessous de la ligne de zéro |
-| Recettes par domaine | La recette de chaque année décomposée par domaine, cinq teintes au plus |
-| Remplissage des sessions inter | La courbe du taux de remplissage, sur une échelle de 0 à 100 % |
-| Intervenants à recruter | Le besoin de recrutement par année, empilé par profil |
+| Figure | Où | Ce qu'elle montre |
+|---|---|---|
+| Recettes projetées par année | Pilotage | Les recettes en barres, l'objectif de l'année en trait pointillé sur la même échelle |
+| Résultat sur coûts directs | Pilotage | Une barre par année, au-dessus ou au-dessous de la ligne de zéro |
+| Recettes par domaine | Pilotage | La recette de chaque année décomposée par domaine, cinq teintes au plus |
+| Ce qui est ferme, ce qui reste à vendre | Pilotage | La part contractée et la part encore à vendre, année par année |
+| Fourchette basse et haute | Pilotage | La recette projetée entre hypothèse pessimiste et optimiste, le projeté marqué sur le trait |
+| Intervenants à recruter | Charge | Le besoin de recrutement par année, empilé par profil |
+| Jours de salle requis | Charge | Les jours requis par année, empilés par type de salle |
 
 Les règles tenues, qui ne sont pas des questions de goût : jamais deux échelles sur un même
 graphique ; une série garde sa couleur quand on filtre, les teintes sont attribuées dans un
@@ -163,7 +169,29 @@ par session que calcule le document.
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
 
-## L'onglet Projection
+## Le plan de charge, en trois volets
+
+`charge.html` porte désormais tout ce qui relève des moyens, sous trois onglets.
+
+**Vivier** — la grille profil par profil, avec la recherche et le rail des formations, et le
+bouton qui complète les lignes manquantes d'après les intervenants décrits sur les formations.
+
+**Recrutement** — ce qui était dans le pilotage : le verdict de l'année, la couverture par
+profil, les priorités classées, les dépendances à une personne, et la trajectoire du besoin sur
+plusieurs années. Il a changé d'écran parce qu'il répond à « avec quels moyens ? », pas à
+« combien allons-nous vendre ? ».
+
+**Salles** — la projection d'occupation, type de salle par type de salle. Les jours requis
+viennent de `Besoins_salles` par l'intermédiaire des projections ; les jours disponibles se
+saisissent ici, année par année et type par type, et sont la seule donnée que cet onglet écrit.
+Le document en déduit la capacité théorique, le nombre de salles que la projection suppose
+(`salles_necessaires`) face au nombre détenu, le taux d'occupation et l'alerte. Trois tuiles en
+tête : les jours à couvrir, les types en dépassement, et ceux au-delà de 85 % d'occupation.
+Un type dont ni les jours disponibles ni les salles détenues ne sont renseignés n'a pas de
+capacité calculable : il est compté à part, sous « Capacité inconnue », plutôt que d'être
+affiché à 0 % comme s'il était vide.
+
+## Le pilotage, en cinq sections
 
 Cinq sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
 résultat, tableau complet), **De quoi elle est faite** (par domaine, puis la rentabilité
@@ -251,11 +279,14 @@ porte des sessions.
 
 Lues : `Annees`, `Formations`, `Projections`, `Ventes_inter`, `Ventes_intra`, `Segments`,
 `Segments_categories`, `Domaines`, `Typologies`, `Gestionnaire`, `Metiers`, `Enjeux`,
-`Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Charge`, `Parametres`.
+`Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Charge`, `Salles`,
+`Types_salles`, `Besoins_salles`, `Tarifs`, `Categories_tarifaires`, `Parametres`.
 
 Écrites : `Formations` (définition), `Projections` et `Ventes_inter` (sessions et places),
-`Intervenants_formation` (profils mobilisés), `Vivier` (vivier et départs), `Annees`
-(objectifs seulement). Tout le reste de ce que montre le pilotage est en lecture seule.
+`Besoins_salles` (type de salle, nombre, jours), `Intervenants_formation` (profils mobilisés),
+`Vivier` (vivier et départs), `Salles` (jours disponibles par type et par année), `Annees`
+(objectifs seulement), `Parametres` (taux de réalisation et scénarios). Tout le reste de ce que
+montrent les tableaux de bord est en lecture seule.
 
 ## Ce que couvre la fiche formation
 

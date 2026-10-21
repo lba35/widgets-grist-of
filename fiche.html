@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=19">
+<link rel="stylesheet" href="commun.css?v=21">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=19"></script>
+<script src="commun.js?v=21"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,12 +42,12 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v19';
+var VERSION = 'v21';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
   'Gestionnaire', 'Metiers', 'Enjeux', 'Obligations', 'Intervenants', 'Intervenants_formation',
-  'Besoins_salles', 'Types_salles'];
+  'Besoins_salles', 'Types_salles', 'Tarifs', 'Parametres'];
 
 var courant = null, filtre = '', curseurGrist = null;
 
@@ -842,6 +842,7 @@ function cout(f) {
   t.appendChild(corps);
   zone.appendChild(t);
   zone.appendChild(pointMort(f));
+  zone.appendChild(tarifsEtMarges(f));
 
   var n = document.createElement('p');
   n.className = 'note';
@@ -976,7 +977,7 @@ function pointMort(f) {
   }
 
   var t = document.createElement('table');
-  t.className = 'matrice';
+  t.className = 'matrice derivation';
   t.style.marginTop = '12px';
   var corps = document.createElement('tbody');
   etapes.forEach(function (e) {
@@ -1064,6 +1065,259 @@ function pointMort(f) {
   }
   zone.appendChild(verdict);
   return zone;
+}
+
+/* ------------------------------------------------- tarifs et marges ---- */
+/* Le plancher, c'est le prix en dessous duquel une session ne couvre plus son
+   coût. Le document le donne par jour et par apprenant ; mais on ne négocie
+   pas toujours dans cette unité — on vend une session entière à un
+   établissement, ou une place pour la durée complète. Les trois expressions
+   sont le même nombre vu sous trois angles, et les montrer côte à côte évite
+   de comparer un tarif à un plancher qui n'est pas dans la même unité.
+
+   C'est exactement ce piège qu'évite la colonne « plancher comparable » de la
+   grille ci-dessous : un tarif au groupe se compare au coût d'une journée de
+   session, un tarif individuel au plancher par apprenant. Les confondre
+   ferait paraître un tarif groupe quinze fois trop rentable. */
+function parametreDoc(cle) {
+  var p = OF.table('Parametres').filter(function (x) { return x.cle === cle; })[0];
+  return p ? (p.valeur || 0) : 0;
+}
+
+function tarifsEtMarges(f) {
+  var zone = document.createElement('div');
+  var cout = f.cout_total || 0;
+  if (!cout) return zone;
+
+  var h = document.createElement('h3');
+  h.textContent = 'Le plancher, selon l\'unité de négociation';
+  zone.appendChild(h);
+
+  var capacite = f.effectif_max || 0;
+  var jours = f.nb_jours || 0;
+  var refRemplissage = parametreDoc('taux_remplissage_reference');
+
+  var unites = [
+    ['À la session, en tout', 'ce que la session doit facturer pour couvrir son coût',
+      OF.eur(cout), true],
+    ['Par jour de session', jours ? OF.ent(jours) + ' jours de formation' : '',
+      f.cout_par_jour ? OF.eur(f.cout_par_jour) : '—', false],
+    ['Par apprenant, session entière',
+      capacite ? 'session complète, ' + OF.ent(capacite) + ' apprenants' : 'effectif non renseigné',
+      capacite ? OF.eur(cout / capacite) : '—', true],
+    ['Par apprenant et par jour', 'c\'est le tarif plancher du document',
+      f.tarif_plancher_jour ? OF.eur(f.tarif_plancher_jour) : '—', false]
+  ];
+  if (f.tarif_plancher_jour_reel) {
+    unites.push(['Par apprenant et par jour, au remplissage de référence',
+      refRemplissage ? 'à ' + Math.round(100 * refRemplissage) + ' % de remplissage'
+        : 'taux de référence du document',
+      OF.eur(f.tarif_plancher_jour_reel), false]);
+    if (capacite && refRemplissage) {
+      unites.push(['Par apprenant, session entière, au remplissage de référence', '',
+        OF.eur(cout / (capacite * refRemplissage)), false]);
+    }
+  }
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  var corps = document.createElement('tbody');
+  unites.forEach(function (u) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = u[0];
+    if (u[3]) td.style.fontWeight = '600';
+    if (u[1]) {
+      var s = document.createElement('div');
+      s.className = 'second';
+      s.textContent = u[1];
+      td.appendChild(s);
+    }
+    tr.appendChild(td);
+    var tdv = document.createElement('td');
+    tdv.className = 'calcul calcule';
+    if (u[3]) { tdv.style.fontWeight = '600'; tdv.style.color = 'var(--encre)'; }
+    tdv.textContent = u[2];
+    tr.appendChild(tdv);
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(defilantFiche(t));
+
+  zone.appendChild(grilleTarifaire(f));
+  return zone;
+}
+
+function defilantFiche(t) {
+  var d = document.createElement('div');
+  d.className = 'defilant';
+  d.appendChild(t);
+  return d;
+}
+
+/* La grille applicable à la typologie de cette formation, et la marge que
+   chaque catégorie dégage. Les prix viennent de la table Tarifs telle
+   quelle ; quand le document a calculé un prix appliqué pour l'année — il
+   revalorise et arrondit — il est montré à côté, et c'est lui qui fait foi. */
+function grilleTarifaire(f) {
+  var zone = document.createElement('div');
+  var h = document.createElement('h3');
+  h.textContent = 'La grille tarifaire de cette typologie, et la marge par catégorie';
+  zone.appendChild(h);
+
+  if (!f.typologie) {
+    zone.appendChild(noteSimple('Aucune typologie sur cette formation : la grille tarifaire '
+      + 'se lit par typologie, il n\'y a donc rien à afficher.'));
+    return zone;
+  }
+  var nomTypologie = nomDe('Typologies', f.typologie);
+  var toutes = OF.table('Tarifs').filter(function (x) {
+    return x.typologie === f.typologie && x.actif !== false && x.prix;
+  });
+  if (!toutes.length) {
+    zone.appendChild(noteSimple('Aucun tarif actif dans la table Tarifs pour la typologie « '
+      + nomTypologie + ' ». Tant qu\'il n\'y en a pas, les recettes projetées restent à zéro.'));
+    return zone;
+  }
+
+  var an = OF.anneePilotee();
+  var annee = an ? an.annee : 0;
+
+  /* une seule ligne par catégorie × modalité × base : le millésime le plus
+     récent qui soit déjà en vigueur, comme le fait la formule du document */
+  var retenus = {};
+  toutes.forEach(function (x) {
+    if (annee && (x.a_partir_de || 0) > annee) return;
+    var cle = [x.categorie || 0, OF.texte(x.modalite), OF.texte(x.base)].join('|');
+    var dejaLa = retenus[cle];
+    if (!dejaLa || (x.a_partir_de || 0) > (dejaLa.a_partir_de || 0)) retenus[cle] = x;
+  });
+  var lignes = Object.keys(retenus).map(function (k) { return retenus[k]; });
+  if (!lignes.length) {
+    zone.appendChild(noteSimple('La typologie « ' + nomTypologie + ' » a des tarifs, mais aucun '
+      + 'n\'est encore en vigueur en ' + annee + '.'));
+    return zone;
+  }
+
+  /* le prix que le document applique réellement, quand une vente l'a calculé */
+  var appliques = {};
+  if (an) {
+    OF.table('Ventes_inter').forEach(function (v) {
+      if (v.formation !== f.id || v.annee !== an.id || !v.prix_unitaire) return;
+      appliques[[v.categorie_appliquee || v.categorie || 0, 'Inter', OF.texte(v.base)].join('|')] =
+        { prix: v.prix_unitaire, version: OF.texte(v.version_tarif) };
+    });
+    OF.table('Ventes_intra').forEach(function (v) {
+      if (v.formation !== f.id || v.annee !== an.id || !v.prix_unitaire) return;
+      appliques[[v.categorie_appliquee || v.categorie || 0, 'Intra', OF.texte(v.base)].join('|')] =
+        { prix: v.prix_unitaire, version: OF.texte(v.version_tarif) };
+    });
+  }
+
+  var plancherJour = f.tarif_plancher_jour || 0;     // par apprenant et par jour
+  var coutJour = f.cout_par_jour || 0;               // par session et par jour
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Catégorie</th><th class="gauche">Base</th>'
+    + '<th>Tarif grille</th><th>Appliqué ' + (annee || '') + '</th>'
+    + '<th class="calcule">Plancher comparable</th><th>Marge</th><th>Taux de marge</th>'
+    + '</tr></thead>';
+  var corps = document.createElement('tbody');
+
+  lignes.sort(function (a, b) {
+    return OF.texte(nomDe('Categories_tarifaires', a.categorie))
+      .localeCompare(OF.texte(nomDe('Categories_tarifaires', b.categorie)), 'fr')
+      || OF.texte(a.base).localeCompare(OF.texte(b.base), 'fr');
+  }).forEach(function (x) {
+    var auGroupe = /groupe/i.test(OF.texte(x.base));
+    var plancher = auGroupe ? coutJour : plancherJour;
+    var cle = [x.categorie || 0, OF.texte(x.modalite), OF.texte(x.base)].join('|');
+    var applique = appliques[cle];
+    var prix = applique ? applique.prix : x.prix;
+    var marge = plancher ? prix - plancher : null;
+    var taux = (plancher && prix) ? marge / prix : null;
+
+    var tr = document.createElement('tr');
+    var tdC = document.createElement('td');
+    tdC.className = 'gauche libelle';
+    tdC.textContent = nomDe('Categories_tarifaires', x.categorie) || 'Catégorie non renseignée';
+    var s = document.createElement('div');
+    s.className = 'second';
+    s.textContent = OF.texte(x.modalite)
+      /* une année s'écrit sans séparateur de milliers */
+      + (x.a_partir_de ? '  ·  grille ' + String(Math.round(x.a_partir_de)) : '')
+      + (applique && /revaloris/i.test(applique.version) ? '  ·  revalorisé' : '');
+    tdC.appendChild(s);
+    tr.appendChild(tdC);
+
+    var tdB = document.createElement('td');
+    tdB.className = 'gauche second';
+    tdB.textContent = OF.texte(x.base) || '—';
+    tr.appendChild(tdB);
+
+    [[OF.eur(x.prix), ''],
+     [applique ? OF.eur(applique.prix) : '—', ''],
+     [plancher ? OF.eur(plancher) : '—', 'calcule']
+    ].forEach(function (c) {
+      var td = document.createElement('td');
+      td.className = 'calcul ' + c[1];
+      td.textContent = c[0];
+      tr.appendChild(td);
+    });
+
+    var tdM = document.createElement('td');
+    tdM.className = 'calcul';
+    tdM.textContent = marge === null ? '—' : (marge >= 0 ? '+' : '') + OF.eur(marge);
+    if (marge !== null) {
+      tdM.style.color = marge >= 0 ? 'var(--fait)' : 'var(--alerte)';
+      tdM.style.fontWeight = '600';
+    }
+    tr.appendChild(tdM);
+
+    var tdT = document.createElement('td');
+    tdT.className = 'calcul';
+    tdT.textContent = taux === null ? '—' : Math.round(100 * taux) + ' %';
+    if (taux !== null && taux < 0) tdT.style.color = 'var(--alerte)';
+    tr.appendChild(tdT);
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(defilantFiche(t));
+
+  var n = document.createElement('p');
+  n.className = 'note';
+  n.style.marginTop = '10px';
+  n.innerHTML = 'Le <b>plancher comparable</b> change avec l\'unité du tarif, et c\'est tout '
+    + 'l\'enjeu : un tarif <b>par apprenant</b> se compare au plancher par apprenant et par '
+    + 'jour (' + (plancherJour ? OF.eur(plancherJour) : '—') + '), un tarif <b>au groupe</b> '
+    + 'au coût d\'une journée de session (' + (coutJour ? OF.eur(coutJour) : '—') + '). '
+    + 'Comparer un tarif groupe au plancher par apprenant le ferait paraître '
+    + (f.effectif_max ? OF.ent(f.effectif_max) + ' fois ' : 'bien ') + 'plus rentable qu\'il '
+    + 'ne l\'est. Le taux de marge est la part du prix qui reste une fois le plancher couvert.';
+  zone.appendChild(n);
+
+  var r = document.createElement('p');
+  r.className = 'note';
+  r.textContent = 'La colonne « Tarif grille » est le prix inscrit dans la table Tarifs. '
+    + 'La colonne « Appliqué » est celui que le document calcule pour l\'année pilotée, '
+    + 'revalorisation et arrondi compris : c\'est lui qui fait foi, et c\'est lui qui sert au '
+    + 'calcul de la marge quand il existe. Un tiret signifie qu\'aucune vente de cette '
+    + 'catégorie n\'est encore projetée sur l\'année — la grille s\'applique telle quelle.';
+  zone.appendChild(r);
+  return zone;
+}
+
+function noteSimple(texte) {
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.textContent = texte;
+  return p;
+}
+function nomDe(table, id) {
+  var l = OF.parId(OF.table(table))[id];
+  return l ? OF.texte(l.intitule) : '';
 }
 
 /* --------------------------------------------------------- projections -- */
