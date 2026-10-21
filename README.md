@@ -169,17 +169,67 @@ par session que calcule le document.
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
 
+## Le vivier se tient par profil
+
+Un formateur GSU est habilité au GSU, pas à « GSU 2 - Etudiants - 3j ». Jusqu'à la v21, le
+vivier se saisissait sur la ligne formation × profil : une seule population répartie sur
+autant de lignes que de formations, et aucune répartition n'était juste.
+
+Écrire le vrai nombre sur chaque ligne — 40 formateurs GSU, les mêmes personnes — faisait
+croire au document qu'il disposait de 8 × 40 × la capacité d'un intervenant, soit trois fois
+la capacité réelle : il concluait « vivier suffisant » là où il manquait 157 recrues. Le
+répartir, cinq par formation, enfermait chaque formation dans sa part et interdisait à un
+formateur de la réactualisation d'aller animer un GSU initial.
+
+Tant que les viviers restaient à zéro l'erreur dormait : la somme ligne à ligne (240 pour le
+GSU en 2027) était presque celle du profil (237). Elle se réveillait à la première saisie.
+
+Depuis la v22, deux grains cohabitent :
+
+| Table | Grain | Ce qu'elle porte |
+|---|---|---|
+| `Vivier` | formation × profil × année | la **demande**, calculée : sessions, interventions, heures |
+| `Vivier_profils` | profil × année | le **vivier**, saisi : autorisés, départs, heures par intervenant — et tout le recrutement |
+
+Le recrutement se décide au niveau du profil, le seul où « combien de personnes » a un sens.
+Sur la ligne de formation, il n'apparaît plus que comme une **imputation au prorata des
+heures** : additionnée sur toutes les formations d'un profil, elle redonne exactement le
+besoin de ce profil, jamais davantage.
+
+### La capacité se compte en heures
+
+Les formations vont de la demi-journée à trois jours. Une capacité en sessions par an les
+traiterait toutes pareil. Le paramètre est donc `heures_par_intervenant_an`, minoré de
+`indisponibilite_intervenants`, et remplaçable profil par profil. C'est l'hypothèse la plus
+structurante du calcul : elle décide à elle seule du nombre de recrues.
+
+### Le seuil de robustesse a changé de portée
+
+`vivier_minimum` s'applique désormais par profil et non par formation. La règle « aucune
+formation ne repose sur une seule personne » ne se lit plus dans ce document : elle relève du
+registre des habilitations.
+
+### Passer à ce modèle
+
+Le script `vivier_par_profil_grist.js` crée la table, reprend les viviers déjà saisis en
+retenant la plus grande valeur de chaque groupe (et signale les écarts), bascule la capacité
+en heures, transforme les colonnes de saisie de `Vivier` en lectures, et réécrit les agrégats
+de `Annees`, `Formations` et `Intervenants`. Il se colle dans la console du navigateur sur la
+page du document et démarre en essai à blanc. Tant qu'il n'a pas tourné, l'onglet Vivier le
+dit et ne propose aucune saisie.
+
 ## Le plan de charge, en trois volets
 
 `charge.html` porte désormais tout ce qui relève des moyens, sous trois onglets.
 
-**Vivier** — la grille profil par profil, avec la recherche et le rail des formations, et le
-bouton qui complète les lignes manquantes d'après les intervenants décrits sur les formations.
+**Vivier** — la grille profil par profil : une ligne par profil, et le bouton qui complète les
+lignes manquantes d'après les intervenants décrits sur les formations. Cliquer sur un profil
+ouvre sa page : la saisie, la dérivation pas à pas du nombre de recrues, et le détail des
+formations qui composent son besoin, en lecture seule.
 
-**Recrutement** — ce qui était dans le pilotage : le verdict de l'année, la couverture par
-profil, les priorités classées, les dépendances à une personne, et la trajectoire du besoin sur
-plusieurs années. Il a changé d'écran parce qu'il répond à « avec quels moyens ? », pas à
-« combien allons-nous vendre ? ».
+**Recrutement** — le verdict de l'année, la couverture par profil, les priorités classées, les
+dépendances à une personne, et la trajectoire du besoin sur plusieurs années. Il a changé
+d'écran parce qu'il répond à « avec quels moyens ? », pas à « combien allons-nous vendre ? ».
 
 **Salles** — la projection d'occupation, type de salle par type de salle. Les jours requis
 viennent de `Besoins_salles` par l'intermédiaire des projections ; les jours disponibles se
@@ -279,12 +329,13 @@ porte des sessions.
 
 Lues : `Annees`, `Formations`, `Projections`, `Ventes_inter`, `Ventes_intra`, `Segments`,
 `Segments_categories`, `Domaines`, `Typologies`, `Gestionnaire`, `Metiers`, `Enjeux`,
-`Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Charge`, `Salles`,
+`Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Vivier_profils`, `Charge`, `Salles`,
 `Types_salles`, `Besoins_salles`, `Tarifs`, `Categories_tarifaires`, `Parametres`.
 
 Écrites : `Formations` (définition), `Projections` et `Ventes_inter` (sessions et places),
 `Besoins_salles` (type de salle, nombre, jours), `Intervenants_formation` (profils mobilisés),
-`Vivier` (vivier et départs), `Salles` (jours disponibles par type et par année), `Annees`
+`Vivier_profils` (vivier, départs, heures par intervenant), `Salles` (jours disponibles par
+type et par année), `Annees`
 (objectifs seulement), `Parametres` (taux de réalisation et scénarios). Tout le reste de ce que
 montrent les tableaux de bord est en lecture seule.
 

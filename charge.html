@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=21">
+<link rel="stylesheet" href="commun.css?v=22">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -33,8 +33,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=21"></script>
-<script src="graphes.js?v=21"></script>
+<script src="commun.js?v=22"></script>
+<script src="graphes.js?v=22"></script>
 <script>
 /* =========================================================================
    Plan de charge — les ressources qu'il faut réunir pour tenir la projection.
@@ -56,12 +56,12 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v21';
+var VERSION = 'v22';
 
 var TABLES = ['Annees', 'Formations', 'Intervenants', 'Intervenants_formation',
-  'Vivier', 'Projections', 'Ventes_intra', 'Parametres', 'Gestionnaire', 'Charge',
-  'Salles', 'Types_salles', 'Besoins_salles'];
-var RELIRE = ['Vivier'];
+  'Vivier', 'Vivier_profils', 'Projections', 'Ventes_intra', 'Parametres', 'Gestionnaire',
+  'Charge', 'Salles', 'Types_salles', 'Besoins_salles'];
+var RELIRE = ['Vivier', 'Vivier_profils'];
 
 var profilCourant = null, idAnnee = null, filtre = '', vue = 'vivier';
 
@@ -102,11 +102,33 @@ function couple(v) {
 function anneesAffichees() { return OF.anneesTriees(); }
 
 /* ------------------------------------------------------- accès données -- */
+/* Deux grains, et c'est tout l'enjeu. `Vivier` décrit la DEMANDE, formation
+   par formation : combien de sessions, combien d'interventions, combien
+   d'heures. `Vivier_profils` porte le VIVIER, profil par profil — parce
+   qu'un formateur GSU est habilité au GSU, pas à « GSU 2 - Etudiants - 3j ».
+   Saisir le vivier sur la formation revenait à répartir une seule population
+   sur huit lignes, et aucune répartition n'était juste. */
 function vivierDe(idA) {
   return OF.table('Vivier').filter(function (v) { return v.annee === idA; });
 }
 function vivierProjete(idA) {
   return OF.table('Vivier').filter(function (v) { return v.annee === idA && v.formation; });
+}
+function migreFait() {
+  return !!(OF.doc && OF.doc.colonnes && OF.doc.colonnes.Vivier_profils);
+}
+function profilsAnnee(idA) {
+  return OF.table('Vivier_profils').filter(function (p) { return p.annee === idA; });
+}
+function ligneProfil(idR, idA) {
+  return profilsAnnee(idA === undefined ? idAnnee : idA).filter(function (p) {
+    return p.ressource === idR;
+  })[0] || null;
+}
+function demandeDe(idR, idA) {
+  return vivierDe(idA === undefined ? idAnnee : idA).filter(function (v) {
+    return v.ressource === idR && v.formation;
+  });
 }
 function nom(tableNom, id, defaut) {
   var l = OF.parId(OF.table(tableNom))[id];
@@ -123,6 +145,17 @@ function profilsMobilises() {
   return OF.trierPar(Object.keys(vus).map(function (id) {
     return OF.parId(OF.table('Intervenants'))[+id];
   }).filter(Boolean), 'intitule');
+}
+
+/* profils mobilisés cette année qui n'ont pas encore de ligne de vivier */
+function profilsSansLigne() {
+  if (!migreFait()) return [];
+  var vus = {};
+  profilsAnnee(idAnnee).forEach(function (p) { if (p.ressource) vus[p.ressource] = 1; });
+  var besoin = {};
+  vivierDe(idAnnee).forEach(function (v) { if (v.ressource) besoin[v.ressource] = 1; });
+  manquants().forEach(function (m) { besoin[m.ressource] = 1; });
+  return Object.keys(besoin).map(Number).filter(function (r) { return !vus[r]; });
 }
 
 /* couples formation × profil projetés mais absents de la table Vivier */
@@ -192,11 +225,11 @@ function rendreRail() {
 }
 
 function majItem(b, p) {
-  var lignes = vivierDe(idAnnee).filter(function (v) { return v.ressource === p.id; });
-  var recruter = lignes.reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
-  var classe = recruter ? 'p-alerte' : (lignes.length ? 'p-fait' : 'p-vide');
-  var detail = recruter ? (recruter + ' à recruter')
-    : (lignes.length ? 'couvert' : 'aucune ligne');
+  var L = ligneProfil(p.id);
+  var recruter = L ? (L.a_recruter || 0) : 0;
+  var classe = recruter ? 'p-alerte' : (L && L.vivier_actuel ? 'p-fait' : 'p-vide');
+  var detail = recruter ? (OF.ent(recruter) + ' à recruter')
+    : (!L ? 'aucune ligne' : (L.vivier_actuel ? 'couvert' : 'vivier non saisi'));
   b.querySelector('.item-nom').textContent = OF.texte(p.intitule);
   b.querySelector('.item-etat').innerHTML =
     '<span class="pastille ' + classe + '"></span>' + OF.echappe(detail);
@@ -205,13 +238,13 @@ function majItem(b, p) {
 }
 
 function rendreAvance() {
-  var lignes = vivierDe(idAnnee);
-  var recruter = lignes.reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
-  var candidats = lignes.reduce(function (n, v) { return n + (v.candidats_a_rechercher || 0); }, 0);
-  var fragiles = lignes.filter(function (v) {
-    return v.interventions_requises && (v.vivier_net || 0) < parametre('vivier_minimum');
+  var P = profilsAnnee(idAnnee);
+  var recruter = somme(P, 'a_recruter');
+  var candidats = somme(P, 'candidats_a_rechercher');
+  var fragiles = P.filter(function (p) {
+    return p.heures_requises && (p.vivier_net || 0) < parametre('vivier_minimum');
   }).length;
-  var vides = lignes.filter(function (v) { return v.interventions_requises && !v.vivier_actuel; }).length;
+  var vides = P.filter(function (p) { return p.heures_requises && !p.vivier_actuel; }).length;
   OF.$('avance').innerHTML =
     '<span><b>' + OF.ent(recruter) + '</b> à recruter</span>'
     + '<span><b>' + OF.ent(candidats) + '</b> candidats à chercher</span>'
@@ -222,50 +255,55 @@ function rendreAvance() {
 }
 
 /* ------------------------------------------------------- recrutement --- */
+/* Le recrutement se décide par profil : c'est le seul niveau où « combien de
+   personnes » a un sens. Les formations n'apparaissent plus que comme ce
+   qu'elles sont — l'origine des heures à couvrir. */
 function pageRecrutement() {
   var zone = document.createElement('div');
   var annee = OF.parId(OF.table('Annees'))[idAnnee];
-  var lignes = vivierProjete(idAnnee);
+  var P = profilsAnnee(idAnnee).filter(function (p) { return p.ressource; });
+  var demande = vivierProjete(idAnnee);
 
   var h1 = document.createElement('h1');
   h1.textContent = 'Pilotage du recrutement — ' + (annee ? annee.annee : '');
   zone.appendChild(h1);
 
-  if (!lignes.length) {
+  if (!migreFait()) { zone.appendChild(aMigrer()); return zone; }
+
+  if (!P.length) {
     var v = document.createElement('p');
     v.className = 'alerte-bloc';
-    v.textContent = 'Aucune ligne de vivier pour cette année : le widget Plan de charge permet '
-      + 'de les créer d\'après les intervenants décrits sur les formations projetées.';
+    v.textContent = 'Aucune ligne de vivier pour cette année. L\'onglet Vivier permet de les '
+      + 'créer — une par profil mobilisé.';
     zone.appendChild(v);
     return zone;
   }
 
   var seuil = parametre('vivier_minimum');
-  var actifs = lignes.filter(function (v) { return v.interventions_requises; });
-  var requis = somme(actifs, 'interventions_requises');
-  var couvert = somme(actifs, 'interventions_couvertes');
-  var manque = somme(actifs, 'interventions_manquantes');
-  var recruter = somme(lignes, 'a_recruter');
-  var candidats = somme(lignes, 'candidats_a_rechercher');
-  var heures = somme(actifs, 'heures_animation');
-  var tendus = actifs.filter(function (v) { return v.a_recruter; });
-  var fragiles = actifs.filter(function (v) { return (v.vivier_net || 0) < seuil; });
-  var nonDecrits = lignes.filter(function (v) { return !v.intervenants_par_session; });
-
-  var profils = {};
-  actifs.forEach(function (v) { (profils[v.ressource || 0] = profils[v.ressource || 0] || []).push(v); });
-  var profilsTendus = Object.keys(profils).filter(function (k) { return somme(profils[k], 'a_recruter'); });
+  var actifs = P.filter(function (p) { return p.heures_requises; });
+  var requis = somme(actifs, 'heures_requises');
+  var couvert = somme(actifs, 'heures_couvertes');
+  var manque = somme(actifs, 'heures_manquantes');
+  var recruter = somme(P, 'a_recruter');
+  var candidats = somme(P, 'candidats_a_rechercher');
+  var cible = somme(actifs, 'vivier_cible');
+  var tendus = actifs.filter(function (p) { return p.a_recruter; });
+  var fragiles = actifs.filter(function (p) { return (p.vivier_net || 0) < seuil; });
+  var nonDecrits = demande.filter(function (v) { return !v.intervenants_par_session; });
 
   /* le verdict, en une phrase */
   var verdict = document.createElement('p');
   verdict.className = 'verdict' + (recruter ? ' tendu' : '');
   verdict.innerHTML = recruter
     ? '<b>' + OF.plur(recruter, 'intervenant') + ' à recruter</b> sur '
-      + OF.plur(tendus.length, 'couple') + ' formation × profil et '
-      + OF.plur(profilsTendus.length, 'profil') + '. Environ <b>'
-      + OF.plur(candidats, 'candidat') + '</b> à rechercher.'
+      + OF.plur(tendus.length, 'profil') + ', '
+      + (manque
+         ? 'pour couvrir ' + OF.ent(manque) + ' h non couvertes sur ' + OF.ent(requis) + ' h'
+         : 'non pour couvrir des heures — elles le sont — mais pour sortir du seuil de '
+           + 'robustesse de ' + OF.plur(seuil, 'intervenant'))
+      + '. Environ <b>' + OF.plur(candidats, 'candidat') + '</b> à rechercher.'
     : 'Le vivier déclaré couvre le prévisionnel ' + (annee ? annee.annee : '')
-      + (fragiles.length ? '. Reste à surveiller ' + OF.plur(fragiles.length, 'couple')
+      + (fragiles.length ? '. Reste à surveiller ' + OF.plur(fragiles.length, 'profil')
         + ' sous le seuil de robustesse.' : '.');
   zone.appendChild(verdict);
 
@@ -277,23 +315,23 @@ function pageRecrutement() {
   inds.className = 'indicateurs';
   var taux = requis ? couvert / requis : 1;
   var fCouv = OF.feu(taux < 0.9, taux < 1);
-  inds.appendChild(indicateur(fCouv, 'Couverture du besoin par le vivier net',
+  inds.appendChild(indicateur(fCouv, 'Couverture des heures par le vivier net',
     OF.pourcent(couvert, requis), 'cible 100 %'));
-  inds.appendChild(indicateur(fCouv, 'Interventions non couvertes', OF.dec(manque), 'cible 0'));
-  inds.appendChild(indicateur(OF.feu(tendus.length > actifs.length / 3, tendus.length > 0),
-    'Couples formation × profil en tension', tendus.length + ' sur ' + actifs.length, 'cible 0'));
-  inds.appendChild(indicateur(OF.feu(fragiles.length > 0, false),
-    'Couples sous le seuil de ' + OF.plur(seuil, 'intervenant'), String(fragiles.length),
-    'règle S01-PO1'));
+  inds.appendChild(indicateur(fCouv, 'Heures d\'animation non couvertes', OF.ent(manque) + ' h', 'cible 0'));
   inds.appendChild(indicateur(
-    OF.feu(profilsTendus.length > Object.keys(profils).length / 2, profilsTendus.length > 0),
-    'Profils à renforcer', profilsTendus.length + ' sur ' + Object.keys(profils).length, 'cible 0'));
+    OF.feu(tendus.length > actifs.length / 2, tendus.length > 0),
+    'Profils à renforcer', tendus.length + ' sur ' + actifs.length, 'cible 0'));
+  inds.appendChild(indicateur(OF.feu(fragiles.length > 0, false),
+    'Profils sous le seuil de ' + OF.plur(seuil, 'intervenant'), String(fragiles.length),
+    'règle S01-PO1'));
+  inds.appendChild(indicateur('', 'Vivier nécessaire au total',
+    OF.plur(cible, 'intervenant'), 'toutes formations confondues'));
   var cap = somme(OF.table('Charge').filter(function (c) { return c.annee === idAnnee; }),
     'capacite_heures');
   inds.appendChild(cap
-    ? indicateur(OF.feu(heures > cap * 1.1, heures > cap), 'Heures d\'animation à couvrir',
-        OF.ent(heures) + ' h sur ' + OF.ent(cap) + ' h', OF.pourcent(heures, cap))
-    : indicateur('', 'Heures d\'animation à couvrir', OF.ent(heures) + ' h',
+    ? indicateur(OF.feu(requis > cap * 1.1, requis > cap), 'Heures d\'animation à couvrir',
+        OF.ent(requis) + ' h sur ' + OF.ent(cap) + ' h', OF.pourcent(requis, cap))
+    : indicateur('', 'Heures d\'animation à couvrir', OF.ent(requis) + ' h',
         'capacité non renseignée'));
   if (nonDecrits.length) {
     inds.appendChild(indicateur(OF.feu(false, true), 'Profils absents de Intervenants_formation',
@@ -302,28 +340,25 @@ function pageRecrutement() {
   zone.appendChild(inds);
 
   /* par profil, en jauges : ce qui est couvert, ce qui manque */
-  if (Object.keys(profils).length) {
-    zone.appendChild(titre('Couverture par profil'));
-    var barres = document.createElement('div');
-    barres.className = 'barres';
-    Object.keys(profils).sort(function (a, b) {
-      return somme(profils[b], 'a_recruter') - somme(profils[a], 'a_recruter');
-    }).forEach(function (k) {
-      var L = profils[k];
-      var r = somme(L, 'interventions_requises'), c = somme(L, 'interventions_couvertes');
-      var part = r ? Math.min(100, Math.round(100 * c / r)) : 100;
-      var aRec = somme(L, 'a_recruter');
-      var ligne = document.createElement('div');
-      ligne.className = 'barre-ligne';
-      ligne.innerHTML = '<span>' + OF.echappe(nom('Intervenants', +k, 'Profil non renseigné'))
-        + '</span><span class="jauge"><span class="' + (part < 80 ? 'grave' : (part < 100 ? 'tendu' : ''))
-        + '" style="width:' + part + '%"></span></span>'
-        + '<span class="calcul">' + part + ' %'
-        + (aRec ? ' · <b class="negatif">' + OF.ent(aRec) + ' à recruter</b>' : '') + '</span>';
-      barres.appendChild(ligne);
-    });
-    zone.appendChild(barres);
-  }
+  zone.appendChild(titre('Couverture par profil'));
+  var barres = document.createElement('div');
+  barres.className = 'barres';
+  actifs.slice().sort(function (a, b) {
+    return (b.a_recruter || 0) - (a.a_recruter || 0)
+      || (b.heures_requises || 0) - (a.heures_requises || 0);
+  }).forEach(function (p) {
+    var part = Math.min(100, Math.round(100 * (p.taux_couverture || 0)));
+    var ligne = document.createElement('div');
+    ligne.className = 'barre-ligne';
+    ligne.innerHTML = '<span>' + OF.echappe(nom('Intervenants', p.ressource, 'Profil non renseigné'))
+      + '</span><span class="jauge"><span class="' + (part < 80 ? 'grave' : (part < 100 ? 'tendu' : ''))
+      + '" style="width:' + part + '%"></span></span>'
+      + '<span class="calcul">' + part + ' %'
+      + (p.a_recruter ? ' · <b class="negatif">' + OF.ent(p.a_recruter) + ' à recruter</b>' : '')
+      + '</span>';
+    barres.appendChild(ligne);
+  });
+  zone.appendChild(barres);
 
   /* les priorités */
   if (tendus.length) {
@@ -332,17 +367,17 @@ function pageRecrutement() {
     ol.className = 'rangs';
     tendus.slice().sort(function (a, b) {
       return (b.a_recruter || 0) - (a.a_recruter || 0)
-        || (b.interventions_manquantes || 0) - (a.interventions_manquantes || 0);
-    }).forEach(function (v, i) {
+        || (b.heures_manquantes || 0) - (a.heures_manquantes || 0);
+    }).forEach(function (p, i) {
       var li = document.createElement('li');
       li.innerHTML = '<span class="rang">' + (i + 1) + '</span>'
-        + '<span>' + OF.echappe(couple(v)) + '<span class="rang-detail"><br>'
-        + OF.dec(v.interventions_manquantes) + ' interventions non couvertes sur '
-        + OF.dec(v.interventions_requises)
-        + (v.entite ? ' — ' + OF.echappe(nom('Gestionnaire', v.entite, '')) : '')
+        + '<span>' + OF.echappe(nom('Intervenants', p.ressource, 'Profil non renseigné'))
+        + '<span class="rang-detail"><br>'
+        + OF.ent(p.heures_manquantes) + ' h non couvertes sur ' + OF.ent(p.heures_requises)
+        + ', réparties sur ' + OF.plur(p.formations_concernees, 'formation')
         + '</span></span>'
-        + '<span class="rang-val">' + OF.ent(v.a_recruter) + ' à recruter<br>'
-        + '<span class="rang-detail">' + OF.ent(v.candidats_a_rechercher) + ' candidats</span></span>';
+        + '<span class="rang-val">' + OF.ent(p.a_recruter) + ' à recruter<br>'
+        + '<span class="rang-detail">' + OF.ent(p.candidats_a_rechercher) + ' candidats</span></span>';
       ol.appendChild(li);
     });
     zone.appendChild(ol);
@@ -351,20 +386,24 @@ function pageRecrutement() {
   /* les dépendances à une personne */
   if (fragiles.length) {
     zone.appendChild(titre('Risque de dépendance à une personne'));
-    var p = document.createElement('p');
-    p.className = 'note';
-    p.textContent = 'Après turn-over, ces couples reposent sur moins de ' + OF.plur(seuil, 'intervenant')
-      + ' : une absence suffit à annuler les sessions.';
-    zone.appendChild(p);
+    var pf = document.createElement('p');
+    pf.className = 'note';
+    pf.textContent = 'Après turn-over, ces profils reposent sur moins de '
+      + OF.plur(seuil, 'intervenant') + ' : une absence suffit à annuler des sessions.';
+    zone.appendChild(pf);
     var ul = document.createElement('ul');
     ul.className = 'rangs';
     fragiles.slice().sort(function (a, b) {
-      return (a.vivier_net || 0) - (b.vivier_net || 0) || (b.nb_sessions || 0) - (a.nb_sessions || 0);
-    }).forEach(function (v) {
+      return (a.vivier_net || 0) - (b.vivier_net || 0)
+        || (b.sessions_concernees || 0) - (a.sessions_concernees || 0);
+    }).forEach(function (p) {
       var li = document.createElement('li');
-      li.innerHTML = '<span class="rang">·</span><span>' + OF.echappe(couple(v))
-        + '<span class="rang-detail"><br>' + OF.plur(v.nb_sessions, 'session') + ' ' + OF.accord(v.nb_sessions, 'projetée', 'projetées') + '</span></span>'
-        + '<span class="rang-val negatif">vivier net ' + OF.dec(v.vivier_net) + '</span>';
+      li.innerHTML = '<span class="rang">·</span><span>'
+        + OF.echappe(nom('Intervenants', p.ressource, 'Profil non renseigné'))
+        + '<span class="rang-detail"><br>' + OF.plur(p.sessions_concernees, 'session') + ' '
+        + OF.accord(p.sessions_concernees, 'projetée', 'projetées') + ' sur '
+        + OF.plur(p.formations_concernees, 'formation') + '</span></span>'
+        + '<span class="rang-val negatif">vivier net ' + OF.dec(p.vivier_net) + '</span>';
       ul.appendChild(li);
     });
     zone.appendChild(ul);
@@ -376,28 +415,37 @@ function pageRecrutement() {
   /* ce qui bloque */
   var aFaire = [];
   var declares = {};
-  lignes.forEach(function (v) { declares[v.formation + ':' + (v.ressource || 0)] = 1; });
+  demande.forEach(function (v) { declares[v.formation + ':' + (v.ressource || 0)] = 1; });
   var oublies = {};
-  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (p) {
-    if (p.annee !== idAnnee || !p.formation || !p.nb_sessions) return;
+  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (pr) {
+    if (pr.annee !== idAnnee || !pr.formation || !pr.nb_sessions) return;
     OF.table('Intervenants_formation').forEach(function (i) {
-      if (i.formation === p.formation && i.ressource && !declares[p.formation + ':' + i.ressource]) {
-        oublies[nom('Formations', p.formation, '?') + ' / ' + nom('Intervenants', i.ressource, '?')] = 1;
+      if (i.formation === pr.formation && i.ressource && !declares[pr.formation + ':' + i.ressource]) {
+        oublies[nom('Formations', pr.formation, '?') + ' / ' + nom('Intervenants', i.ressource, '?')] = 1;
       }
     });
   });
   if (Object.keys(oublies).length) {
-    aFaire.push('<b>Déclarer le vivier</b> de ' + OF.plur(Object.keys(oublies).length, 'couple')
-      + ' ' + OF.accord(Object.keys(oublies).length, 'projeté', 'projetés') + ' : ' + OF.echappe(Object.keys(oublies).sort().join(', ')) + '.');
+    aFaire.push('<b>Déclarer la demande</b> de ' + OF.plur(Object.keys(oublies).length, 'couple')
+      + ' ' + OF.accord(Object.keys(oublies).length, 'projeté', 'projetés') + ' : '
+      + OF.echappe(Object.keys(oublies).sort().join(', ')) + '.');
   }
   if (nonDecrits.length) {
     aFaire.push('<b>Décrire les intervenants</b> dans Intervenants_formation pour : '
       + OF.echappe(nonDecrits.map(couple).sort().join(', ')) + '.');
   }
-  var vides = actifs.filter(function (v) { return !v.vivier_actuel; });
+  var vides = actifs.filter(function (p) { return !p.vivier_actuel; });
   if (vides.length) {
-    aFaire.push('<b>Saisir le vivier actuel</b> de ' + OF.plur(vides.length, 'ligne') + ' : le besoin y '
-      + 'est calculé comme si aucun intervenant n\'était autorisé.');
+    aFaire.push('<b>Saisir le vivier actuel</b> de ' + OF.plur(vides.length, 'profil')
+      + ' : le besoin y est calculé comme si aucun intervenant n\'était autorisé — '
+      + OF.echappe(vides.map(function (p) {
+          return nom('Intervenants', p.ressource, '?');
+        }).sort().join(', ')) + '.');
+  }
+  if (!parametre('heures_par_intervenant_an')) {
+    aFaire.push('<b>Renseigner le paramètre</b> <code>heures_par_intervenant_an</code> : '
+      + 'sans lui, la capacité d\'un intervenant est nulle et tout le besoin apparaît '
+      + 'comme à recruter.');
   }
   if (!cap) {
     aFaire.push('<b>Renseigner la capacité</b> dans la table Charge, pour confronter les heures '
@@ -413,10 +461,10 @@ function pageRecrutement() {
 
   var note = document.createElement('p');
   note.className = 'aide';
-  note.textContent = 'Les lignes de vivier additionnent des autorisations, pas des personnes : '
-    + 'un même intervenant peut être autorisé sur plusieurs formations. Au sein d\'un même '
-    + 'profil, une recrue polyvalente peut couvrir plusieurs besoins — le total à recruter est '
-    + 'un majorant, à arbitrer en S01-PO1.';
+  note.textContent = 'Un intervenant compte une fois, dans son profil : les totaux ci-dessus '
+    + 'comptent des personnes, pas des autorisations. La capacité d\'un intervenant se mesure '
+    + 'en heures d\'animation par an, pour que les formations longues et les demi-journées '
+    + 'ne pèsent pas pareil.';
   zone.appendChild(note);
   return zone;
 }
@@ -428,10 +476,10 @@ function trajectoireRecrutement(zone) {
 
   var parProfil = {};
   annees.forEach(function (a) {
-    vivierProjete(a.id).forEach(function (v) {
-      if (!v.a_recruter) return;
-      var k = v.ressource || 0;
-      (parProfil[k] = parProfil[k] || {})[a.id] = (parProfil[k][a.id] || 0) + v.a_recruter;
+    profilsAnnee(a.id).forEach(function (p) {
+      if (!p.a_recruter || !p.ressource) return;
+      (parProfil[p.ressource] = parProfil[p.ressource] || {})[a.id] =
+        (parProfil[p.ressource][a.id] || 0) + p.a_recruter;
     });
   });
   var profils = Object.keys(parProfil);
@@ -465,7 +513,7 @@ function trajectoireRecrutement(zone) {
   zone.appendChild(titre('Quand recruter, et de quel profil'));
   G.figure(zone, {
     titre: 'Intervenants à recruter par année',
-    sous: 'Un même profil polyvalent peut couvrir plusieurs besoins : ces totaux sont des majorants.',
+    sous: 'Un intervenant compte une fois, dans son profil : ces totaux sont des personnes.',
     haut: 200,
     series: series,
     chiffres: G.chiffres('Les chiffres',
@@ -485,7 +533,6 @@ function trajectoireRecrutement(zone) {
     }
   });
 }
-
 
 /* ------------------------------------------------------------ salles --- */
 /* Le document calcule déjà tout : jours requis d'après les besoins déclarés
@@ -734,68 +781,213 @@ function rendrePage() {
     return;
   }
 
+  if (!migreFait()) { page.appendChild(aMigrer()); return; }
+
   if (!profilCourant) {
     page.appendChild(synthese(annee));
     return;
   }
   var profil = OF.parId(OF.table('Intervenants'))[profilCourant];
-  var lignes = vivierDe(idAnnee).filter(function (v) { return v.ressource === profilCourant; })
-    .sort(function (a, b) {
-      return (b.a_recruter || 0) - (a.a_recruter || 0)
-        || (b.interventions_manquantes || 0) - (a.interventions_manquantes || 0)
-        || OF.texte(nom('Formations', a.formation, '')).localeCompare(
-             OF.texte(nom('Formations', b.formation, '')), 'fr');
-    });
+  var P = ligneProfil(profilCourant);
+  var lignes = demandeDe(profilCourant).sort(function (a, b) {
+    return (b.heures_animation || 0) - (a.heures_animation || 0)
+      || OF.texte(nom('Formations', a.formation, '')).localeCompare(
+           OF.texte(nom('Formations', b.formation, '')), 'fr');
+  });
 
   var h1 = document.createElement('h1');
   h1.textContent = OF.texte(profil && profil.intitule);
   page.appendChild(h1);
 
-  var recruter = lignes.reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
-  var candidats = lignes.reduce(function (n, v) { return n + (v.candidats_a_rechercher || 0); }, 0);
-  var heures = lignes.reduce(function (n, v) { return n + (v.heures_animation || 0); }, 0);
-  var sous = document.createElement('p');
-  sous.className = 'sous';
-  sous.textContent = recruter
-    ? ('Recruter ' + OF.plur(recruter, 'intervenant') + ' de ce profil en ' + annee.annee
-       + ', soit environ ' + OF.plur(candidats, 'candidat') + ' à rechercher pour '
-       + OF.plur(heures, 'heure') + ' d\'animation.')
-    : ('Le vivier déclaré couvre les ' + OF.plur(heures, 'heure') + ' d\'animation de ce profil en '
-       + annee.annee + '.');
-  page.appendChild(sous);
-
-  if (!lignes.length) {
+  if (!P) {
     var v = document.createElement('p');
     v.className = 'alerte-bloc';
     v.textContent = 'Aucune ligne de vivier pour ce profil en ' + annee.annee
-      + '. Le bouton « Compléter les lignes » les crée d\'après les intervenants décrits '
-      + 'sur les formations projetées.';
+      + '. Le bouton « Compléter les lignes » la crée — une seule, pour le profil : '
+      + 'le vivier ne se saisit plus formation par formation.';
     page.appendChild(v);
     return;
   }
-  page.appendChild(tableau(lignes));
+
+  var sous = document.createElement('p');
+  sous.className = 'sous';
+  sous.textContent = P.a_recruter
+    ? ('Recruter ' + OF.plur(P.a_recruter, 'intervenant') + ' de ce profil en ' + annee.annee
+       + ', soit environ ' + OF.plur(P.candidats_a_rechercher, 'candidat') + ' à rechercher pour '
+       + OF.plur(P.heures_requises, 'heure') + ' d\'animation sur '
+       + OF.plur(P.formations_concernees, 'formation') + '.')
+    : (P.vivier_actuel
+       ? ('Le vivier couvre les ' + OF.plur(P.heures_requises, 'heure')
+          + ' d\'animation de ce profil en ' + annee.annee + '.')
+       : ('Vivier non saisi : il faudrait ' + OF.plur(P.vivier_cible, 'intervenant')
+          + ' de ce profil pour couvrir les ' + OF.plur(P.heures_requises, 'heure')
+          + ' d\'animation de ' + annee.annee + '.'));
+  page.appendChild(sous);
+
+  page.appendChild(saisieProfil(P));
+  page.appendChild(titre('Comment on arrive à ce chiffre'));
+  page.appendChild(derivation(P));
+  page.appendChild(titre('D\'où vient le besoin'));
+  page.appendChild(defilant(demande(lignes, P)));
   page.appendChild(aide());
 }
 
-function tableau(lignes) {
+/* ----------------------------------------------- saisie, au niveau profil */
+function saisieProfil(P) {
+  var d = document.createElement('div');
+  d.className = 'tuiles';
+  d.appendChild(champTuile(P, 'vivier_actuel', 'Vivier actuel',
+    'intervenants de ce profil aujourd\'hui autorisés', false,
+    !!P.heures_requises && !P.vivier_actuel));
+  d.appendChild(champTuile(P, 'departs_connus', 'Départs connus',
+    'déjà identifiés pour l\'année', false, false));
+  d.appendChild(champTuile(P, 'heures_par_intervenant', 'Heures / an par intervenant',
+    'vide = le paramètre général', true, false));
+  return d;
+}
+
+function champTuile(P, colonne, libelle, contexte, vide, manquant) {
+  var d = document.createElement('div');
+  d.className = 'tuile';
+  var lib = document.createElement('div');
+  lib.className = 'tuile-lib';
+  lib.textContent = libelle;
+  d.appendChild(lib);
+  var zone = document.createElement('div');
+  zone.className = 'tuile-val';
+  zone.appendChild(champVivier(P, colonne, vide, manquant, libelle));
+  d.appendChild(zone);
+  var ctx = document.createElement('div');
+  ctx.className = 'tuile-ctx';
+  ctx.textContent = contexte;
+  d.appendChild(ctx);
+  return d;
+}
+
+/* La dérivation : les mêmes chiffres, mais dans l'ordre où on les obtient.
+   Sans elle, « 157 à recruter » est un verdict qu'on ne peut pas discuter. */
+function derivation(P) {
+  var t = document.createElement('table');
+  t.className = 'matrice derivation';
+  var corps = document.createElement('tbody');
+  var indispo = parametre('indisponibilite_intervenants');
+  var turnover = parametre('turnover_vivier');
+  var tauxNouveau = parametre('capacite_nouvel_intervenant');
   var seuil = parametre('vivier_minimum');
+
+  var etapes = [
+    { libelle: 'Heures d\'animation à couvrir',
+      detail: OF.plur(P.formations_concernees, 'formation') + ', '
+        + OF.plur(P.sessions_concernees, 'session') + ', '
+        + OF.plur(P.interventions_requises, 'intervention'),
+      valeur: OF.ent(P.heures_requises) + ' h', fort: true },
+    { libelle: 'Ce qu\'un intervenant peut animer dans l\'année',
+      detail: OF.ent((P.heures_par_intervenant || parametre('heures_par_intervenant_an')))
+        + ' h par an, moins ' + Math.round(100 * indispo) + ' % d\'indisponibilité',
+      valeur: OF.dec(P.capacite_intervenant) + ' h' },
+    { libelle: 'Vivier nécessaire au total',
+      detail: OF.ent(P.heures_requises) + ' h ÷ ' + OF.dec(P.capacite_intervenant)
+        + ' h, arrondi à l\'intervenant supérieur',
+      valeur: OF.ent(P.vivier_cible) + ' ' + OF.accord(P.vivier_cible, 'intervenant', 'intervenants'),
+      fort: true },
+    { libelle: 'Vivier net, après turn-over',
+      detail: OF.plur(P.vivier_actuel, 'autorisé') + ' moins la plus grande des deux pertes : '
+        + OF.plur(P.departs_connus, 'départ connu', 'départs connus') + ' ou '
+        + Math.round(100 * turnover) + ' % de turn-over',
+      valeur: OF.dec(P.vivier_net),
+      classe: P.heures_requises && (P.vivier_net || 0) < seuil ? 'negatif' : '' },
+    { libelle: 'Heures couvertes par ce vivier',
+      detail: OF.dec(P.vivier_net) + ' × ' + OF.dec(P.capacite_intervenant) + ' h, plafonné au besoin',
+      valeur: OF.ent(P.heures_couvertes) + ' h  ·  '
+        + Math.round(100 * (P.taux_couverture || 0)) + ' %',
+      classe: (P.taux_couverture || 0) >= 1 ? 'positif' : 'negatif' },
+  ];
+  if (P.heures_manquantes) {
+    etapes.push({ libelle: 'Heures manquantes',
+      detail: OF.ent(P.heures_requises) + ' h − ' + OF.ent(P.heures_couvertes) + ' h',
+      valeur: OF.ent(P.heures_manquantes) + ' h', classe: 'negatif' });
+  }
+  if (P.a_recruter) {
+    /* Deux raisons de recruter, et il faut dire laquelle : couvrir les heures
+       qui manquent, ou simplement ne pas reposer sur une seule personne. La
+       seconde arrive souvent sur les petits profils, dont les heures sont
+       couvertes — sans cette ligne, le chiffre serait inexplicable. */
+    var parCharge = P.heures_manquantes && P.capacite_intervenant && tauxNouveau
+      ? Math.ceil(P.heures_manquantes / (P.capacite_intervenant * tauxNouveau)) : 0;
+    etapes.push(parCharge >= P.a_recruter
+      ? { libelle: 'Intervenants à recruter',
+          detail: OF.ent(P.heures_manquantes) + ' h ÷ ('
+            + OF.dec(P.capacite_intervenant) + ' h × ' + Math.round(100 * tauxNouveau)
+            + ' %) — une recrue accompagnée ne compte que pour une fraction la première année',
+          valeur: OF.ent(P.a_recruter), fort: true, classe: 'negatif' }
+      : { libelle: 'Intervenants à recruter',
+          detail: 'les heures sont couvertes, mais le vivier net (' + OF.dec(P.vivier_net)
+            + ') reste sous le seuil de ' + OF.plur(seuil, 'intervenant')
+            + ' : il faut le remonter pour qu\'une absence n\'annule pas de session',
+          valeur: OF.ent(P.a_recruter), fort: true, classe: 'negatif' });
+    etapes.push({ libelle: 'Candidats à rechercher',
+      detail: OF.ent(P.a_recruter) + ' ÷ '
+        + Math.round(100 * parametre('taux_selection_candidats')) + ' % de sélection',
+      valeur: OF.ent(P.candidats_a_rechercher) });
+  }
+
+  etapes.forEach(function (e) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = e.libelle;
+    if (e.fort) td.style.fontWeight = '600';
+    if (e.detail) {
+      var s = document.createElement('div');
+      s.className = 'second';
+      s.textContent = e.detail;
+      td.appendChild(s);
+    }
+    tr.appendChild(td);
+    var tdv = document.createElement('td');
+    tdv.className = 'calcul calcule';
+    if (e.fort) { tdv.style.fontWeight = '600'; tdv.style.color = 'var(--encre)'; }
+    if (e.classe) {
+      tdv.style.color = e.classe === 'positif' ? 'var(--fait)' : 'var(--alerte)';
+      tdv.style.fontWeight = '600';
+    }
+    tdv.textContent = e.valeur;
+    tr.appendChild(tdv);
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  return t;
+}
+
+/* La demande, formation par formation : en lecture seule, parce qu'elle est
+   calculée par le document à partir des sessions projetées et des
+   intervenants décrits. On la montre pour qu'on sache d'où viennent les
+   heures, pas pour la corriger ici. */
+function demande(lignes, P) {
   var t = document.createElement('table');
   t.className = 'matrice';
   t.innerHTML = '<thead><tr>'
     + '<th class="gauche">Formation</th>'
-    + '<th>Vivier actuel</th><th>Départs connus</th><th>Sessions / an</th>'
-    + '<th class="calcule">Sessions</th><th>Interventions</th><th>Vivier net</th>'
-    + '<th>Manquantes</th><th>À recruter</th><th>Candidats</th>'
-    + '<th class="gauche">Situation</th></tr></thead>';
+    + '<th class="calcule">Sessions</th><th>Par session</th><th>Interventions</th>'
+    + '<th>Heures</th><th>Part du besoin</th><th>Recrues imputées</th></tr></thead>';
   var corps = document.createElement('tbody');
 
   lignes.forEach(function (v, i) {
     var tr = document.createElement('tr');
     tr.dataset.ligne = i;
-
     var td = document.createElement('td');
     td.className = 'gauche libelle';
-    td.textContent = nom('Formations', v.formation, 'Formation inconnue');
+    var bouton = document.createElement('button');
+    bouton.type = 'button';
+    bouton.className = 'lien';
+    bouton.textContent = nom('Formations', v.formation, 'Formation inconnue');
+    bouton.addEventListener('click', function () {
+      /* ouvrir la formation dans le document quand le widget y est lié ;
+         sinon il ne se passe rien, et c'est très bien */
+      try { window.grist.setCursorPos({ tableId: 'Formations', rowId: v.formation }); }
+      catch (e) { /* widget non lié */ }
+    });
+    td.appendChild(bouton);
     var ent = nom('Gestionnaire', v.entite, '');
     if (ent) {
       var s = document.createElement('div');
@@ -805,51 +997,51 @@ function tableau(lignes) {
     }
     tr.appendChild(td);
 
-    tr.appendChild(cellSaisie(v, 'vivier_actuel', i, 0,
-      !!v.interventions_requises && !v.vivier_actuel));
-    tr.appendChild(cellSaisie(v, 'departs_connus', i, 1, false));
-    tr.appendChild(cellSaisie(v, 'sessions_par_intervenant', i, 2, false, true));
-
-    [['nb_sessions', OF.dec, true], ['interventions_requises', OF.dec],
-     ['vivier_net', OF.dec], ['interventions_manquantes', OF.dec],
-     ['a_recruter', OF.ent], ['candidats_a_rechercher', OF.ent]
+    var part = P && P.heures_requises ? (v.heures_animation || 0) / P.heures_requises : 0;
+    [[OF.dec(v.nb_sessions), true], [OF.dec(v.intervenants_par_session), false],
+     [OF.dec(v.interventions_requises), false], [OF.ent(v.heures_animation), false],
+     [Math.round(100 * part) + ' %', false],
+     [v.recrues_imputees ? OF.dec(v.recrues_imputees) : '—', false]
     ].forEach(function (c) {
       var tdc = document.createElement('td');
-      tdc.className = 'calcul' + (c[2] ? ' calcule' : '');
-      var val = v[c[0]];
-      tdc.textContent = (val || val === 0) ? c[1](val) : '—';
-      if (c[0] === 'a_recruter' && val) { tdc.style.fontWeight = '600'; tdc.classList.add('negatif'); }
-      if (c[0] === 'vivier_net' && v.interventions_requises && (val || 0) < seuil) {
-        tdc.classList.add('negatif');
-        tdc.title = 'Sous le seuil de ' + OF.plur(seuil, 'intervenant') + ' : une absence suffit '
-          + 'à annuler les sessions';
-      }
+      tdc.className = 'calcul' + (c[1] ? ' calcule' : '');
+      tdc.textContent = c[0];
       tr.appendChild(tdc);
     });
-
-    var tds = document.createElement('td');
-    tds.className = 'gauche second';
-    tds.textContent = OF.texte(v.situation);
-    tr.appendChild(tds);
     corps.appendChild(tr);
   });
+
+  if (P) {
+    var pied = document.createElement('tr');
+    pied.className = 'total';
+    pied.innerHTML = '<td class="gauche libelle" style="font-weight:600">Total</td>'
+      + '<td class="calcul calcule">' + OF.dec(P.sessions_concernees) + '</td>'
+      + '<td class="calcul">—</td>'
+      + '<td class="calcul">' + OF.dec(P.interventions_requises) + '</td>'
+      + '<td class="calcul" style="font-weight:600">' + OF.ent(P.heures_requises) + '</td>'
+      + '<td class="calcul">100 %</td>'
+      + '<td class="calcul" style="font-weight:600">' + OF.ent(P.a_recruter) + '</td>';
+    corps.appendChild(pied);
+  }
   t.appendChild(corps);
   return t;
 }
 
-function cellSaisie(v, colonne, iLigne, iCol, manquant, vide) {
-  var td = document.createElement('td');
+/* --------------------------------------------------- champ de Vivier_profils */
+function champVivier(P, colonne, vide, manquant, etiquette, iLigne, iCol) {
   var el = document.createElement('input');
   el.className = 'champ' + (manquant ? ' vide-attendu' : '');
   el.inputMode = 'decimal';
   el.placeholder = vide ? 'défaut' : '—';
-  el.value = (v[colonne] || v[colonne] === 0) && !(vide && !v[colonne]) ? OF.dec(v[colonne]) : '';
-  el.dataset.ligne = iLigne;
-  el.dataset.col = iCol;
-  el.setAttribute('aria-label', OF.colonne('Vivier', colonne).libelle + ' — '
-    + nom('Formations', v.formation, ''));
+  el.value = (P[colonne] || P[colonne] === 0) && !(vide && !P[colonne]) ? OF.dec(P[colonne]) : '';
+  el.dataset.rec = P.id;
+  el.dataset.colonne = colonne;
+  el.dataset.vide = vide ? '1' : '0';
+  if (iLigne !== undefined) { el.dataset.ligne = iLigne; el.dataset.col = iCol; }
+  el.setAttribute('aria-label', (etiquette || colonne) + ' — '
+    + nom('Intervenants', P.ressource, ''));
   var origine = el.value;
-  var cle = 'vivier:' + v.id + ':' + colonne;
+  var cle = 'vivier:' + P.id + ':' + colonne;
   var enregistrer = function () {
     var val = el.value.trim() === '' ? (vide ? null : 0) : OF.nombre(el.value);
     if (val !== null && val < 0) {
@@ -859,7 +1051,7 @@ function cellSaisie(v, colonne, iLigne, iCol, manquant, vide) {
     }
     var champs = {};
     champs[colonne] = val;
-    OF.appliquer([['UpdateRecord', 'Vivier', v.id, champs]], RELIRE, rafraichir)
+    OF.appliquer([['UpdateRecord', 'Vivier_profils', P.id, champs]], RELIRE, rafraichir)
       .catch(function () { el.classList.add('erreur'); });
   };
   el.addEventListener('input', function () {
@@ -872,8 +1064,7 @@ function cellSaisie(v, colonne, iLigne, iCol, manquant, vide) {
     if (ev.key === 'ArrowDown' || ev.key === 'Enter') { ev.preventDefault(); deplacer(el, 1); }
     else if (ev.key === 'ArrowUp') { ev.preventDefault(); deplacer(el, -1); }
   });
-  td.appendChild(el);
-  return td;
+  return el;
 }
 
 function deplacer(el, pas) {
@@ -883,146 +1074,258 @@ function deplacer(el, pas) {
 }
 
 /* ------------------------------------------------------------ synthèse -- */
+/* La grille de saisie : une ligne par profil, pas par formation × profil.
+   Dix lignes au lieu de trente et une, et surtout une seule case par profil
+   — les mêmes personnes n'y sont plus comptées huit fois. */
 function synthese(annee) {
   var zone = document.createElement('div');
-  var lignes = vivierDe(idAnnee);
+  var P = profilsAnnee(idAnnee);
+  var seuil = parametre('vivier_minimum');
   var h1 = document.createElement('h1');
   h1.textContent = 'Plan de charge ' + (annee ? annee.annee : '');
   zone.appendChild(h1);
 
   var p = document.createElement('p');
   p.className = 'sous';
-  p.textContent = 'Choisissez un profil à gauche pour saisir son vivier. Ce récapitulatif '
-    + 'additionne des autorisations, pas des personnes : un même intervenant peut être '
-    + 'autorisé sur plusieurs formations.';
+  p.textContent = 'Le vivier se saisit ici, profil par profil : un formateur GSU est habilité '
+    + 'au GSU, pas à une formation en particulier. Les besoins des formations s\'y additionnent. '
+    + 'Cliquez sur un profil pour voir d\'où vient son besoin.';
   zone.appendChild(p);
 
-  if (!lignes.length) {
+  if (!P.length) {
     var al = document.createElement('p');
     al.className = 'alerte-bloc';
     al.textContent = 'Aucune ligne de vivier pour cette année. Le bouton « Compléter les lignes » '
-      + 'les crée d\'après les intervenants décrits sur les formations projetées.';
+      + 'en crée une par profil mobilisé, d\'après les intervenants décrits sur les formations '
+      + 'projetées.';
     zone.appendChild(al);
     return zone;
   }
 
-  var groupes = {};
-  lignes.forEach(function (v) {
-    var cle = v.ressource || 0;
-    (groupes[cle] = groupes[cle] || []).push(v);
-  });
   var t = document.createElement('table');
   t.className = 'matrice';
-  t.innerHTML = '<thead><tr><th class="gauche">Profil</th><th>Formations</th>'
-    + '<th>Interventions</th><th>Heures</th><th>Vivier net</th>'
-    + '<th class="calcule">À recruter</th><th>Candidats</th></tr></thead>';
+  t.innerHTML = '<thead><tr><th class="gauche">Profil</th>'
+    + '<th>Vivier actuel</th><th>Départs</th><th>Heures / an</th>'
+    + '<th class="calcule">Formations</th><th>Heures à couvrir</th>'
+    + '<th>Vivier net</th><th>Nécessaire</th><th>À recruter</th><th>Candidats</th>'
+    + '<th class="gauche">Situation</th></tr></thead>';
   var corps = document.createElement('tbody');
-  var ordre = Object.keys(groupes).sort(function (a, b) {
-    var ra = groupes[a].reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
-    var rb = groupes[b].reduce(function (n, v) { return n + (v.a_recruter || 0); }, 0);
-    return rb - ra;
-  });
-  var somme = function (L, c) { return L.reduce(function (n, v) { return n + (v[c] || 0); }, 0); };
 
-  ordre.forEach(function (cle) {
-    var L = groupes[cle];
+  P.slice().sort(function (a, b) {
+    return (b.a_recruter || 0) - (a.a_recruter || 0)
+      || (b.heures_requises || 0) - (a.heures_requises || 0)
+      || OF.texte(nom('Intervenants', a.ressource, '')).localeCompare(
+           OF.texte(nom('Intervenants', b.ressource, '')), 'fr');
+  }).forEach(function (L, i) {
     var tr = document.createElement('tr');
+    tr.dataset.ligne = i;
     var tdN = document.createElement('td');
     tdN.className = 'gauche libelle';
     var bouton = document.createElement('button');
     bouton.type = 'button';
-    bouton.className = 'lieu';
-    bouton.textContent = nom('Intervenants', +cle, 'Profil non renseigné');
+    bouton.className = 'lien';
+    bouton.textContent = nom('Intervenants', L.ressource, 'Profil non renseigné');
     bouton.addEventListener('click', function () {
-      profilCourant = +cle; rendreRail(); rendrePage();
+      profilCourant = L.ressource; rendreRail(); rendrePage();
     });
     tdN.appendChild(bouton);
+    if (OF.texte(L.alerte)) {
+      var a = document.createElement('div');
+      a.className = 'second negatif';
+      a.textContent = OF.texte(L.alerte);
+      tdN.appendChild(a);
+    }
     tr.appendChild(tdN);
-    [[L.length, OF.ent], [somme(L, 'interventions_requises'), OF.dec],
-     [somme(L, 'heures_animation'), OF.ent], [somme(L, 'vivier_net'), OF.dec],
-     [somme(L, 'a_recruter'), OF.ent], [somme(L, 'candidats_a_rechercher'), OF.ent]
-    ].forEach(function (c, i) {
+
+    [['vivier_actuel', false, !!L.heures_requises && !L.vivier_actuel],
+     ['departs_connus', false, false], ['heures_par_intervenant', true, false]
+    ].forEach(function (c, k) {
       var td = document.createElement('td');
-      td.className = 'calcul' + (i === 4 ? ' calcule' : '');
-      td.textContent = c[1](c[0]);
-      if (i === 4 && c[0]) { td.style.fontWeight = '600'; td.classList.add('negatif'); }
+      td.appendChild(champVivier(L, c[0], c[1], c[2],
+        OF.colonne('Vivier_profils', c[0]).libelle, i, k));
       tr.appendChild(td);
     });
+
+    [['formations_concernees', OF.ent, true], ['heures_requises', OF.ent],
+     ['vivier_net', OF.dec], ['vivier_cible', OF.ent],
+     ['a_recruter', OF.ent], ['candidats_a_rechercher', OF.ent]
+    ].forEach(function (c) {
+      var td = document.createElement('td');
+      td.className = 'calcul' + (c[2] ? ' calcule' : '');
+      td.dataset.rec = L.id;
+      td.dataset.colonne = c[0];
+      td.dataset.ent = c[1] === OF.ent ? '1' : '0';
+      var val = L[c[0]];
+      td.textContent = (val || val === 0) ? c[1](val) : '—';
+      /* .calcul impose sa couleur sourde à la même spécificité que .negatif :
+         on la surcharge ici plutôt que de jouer à qui arrive en dernier */
+      if (c[0] === 'a_recruter' && val) {
+        td.style.fontWeight = '600'; td.style.color = 'var(--alerte)';
+      }
+      if (c[0] === 'vivier_net' && L.heures_requises && (val || 0) < seuil) {
+        td.style.color = 'var(--alerte)';
+        td.title = 'Sous le seuil de ' + OF.plur(seuil, 'intervenant') + ' : une absence suffit '
+          + 'à annuler des sessions';
+      }
+      tr.appendChild(td);
+    });
+
+    var tds = document.createElement('td');
+    tds.className = 'gauche second';
+    tds.dataset.rec = L.id;
+    tds.dataset.colonne = 'situation';
+    tds.dataset.texte = '1';
+    tds.textContent = OF.texte(L.situation);
+    tr.appendChild(tds);
     corps.appendChild(tr);
   });
-  t.appendChild(corps);
-  zone.appendChild(t);
 
-  var n = manquants().length;
-  if (n) {
+  var tot = document.createElement('tr');
+  tot.className = 'total';
+  tot.innerHTML = '<td class="gauche libelle" style="font-weight:600">Total</td>'
+    + '<td class="calcul">' + OF.ent(somme(P, 'vivier_actuel')) + '</td>'
+    + '<td class="calcul">' + OF.ent(somme(P, 'departs_connus')) + '</td>'
+    + '<td class="calcul">—</td>'
+    + '<td class="calcul calcule">—</td>'
+    + '<td class="calcul" style="font-weight:600">' + OF.ent(somme(P, 'heures_requises')) + '</td>'
+    + '<td class="calcul">' + OF.dec(somme(P, 'vivier_net')) + '</td>'
+    + '<td class="calcul">' + OF.ent(somme(P, 'vivier_cible')) + '</td>'
+    + '<td class="calcul" style="font-weight:600">' + OF.ent(somme(P, 'a_recruter')) + '</td>'
+    + '<td class="calcul">' + OF.ent(somme(P, 'candidats_a_rechercher')) + '</td>'
+    + '<td></td>';
+  corps.appendChild(tot);
+  t.appendChild(corps);
+  zone.appendChild(defilant(t));
+  zone.appendChild(aide());
+
+  var sans = profilsSansLigne().length;
+  if (sans) {
     var av = document.createElement('p');
     av.className = 'alerte-bloc';
     av.style.marginTop = '20px';
-    av.textContent = OF.plur(n, 'couple') + ' formation × profil ' + OF.accord(n, 'est projeté', 'sont projetés')
-      + ' en ' + annee.annee + ' sans ligne de vivier : leur charge est invisible. '
+    av.textContent = OF.plur(sans, 'profil') + ' ' + OF.accord(sans, 'est mobilisé', 'sont mobilisés')
+      + ' en ' + annee.annee + ' sans ligne de vivier : leur besoin est invisible. '
       + 'Le bouton « Compléter les lignes » les ajoute.';
     zone.appendChild(av);
   }
+  var n = manquants().length;
+  if (n) {
+    var av2 = document.createElement('p');
+    av2.className = 'alerte-bloc';
+    av2.style.marginTop = '12px';
+    av2.textContent = OF.plur(n, 'couple') + ' formation × profil '
+      + OF.accord(n, 'est projeté', 'sont projetés') + ' sans ligne de demande : les heures de '
+      + OF.accord(n, 'cette formation', 'ces formations') + ' ne comptent pas encore. '
+      + 'Le même bouton les ajoute.';
+    zone.appendChild(av2);
+  }
   return zone;
+}
+
+/* Le widget ne peut rien faire tant que la table n'existe pas : il le dit
+   une fois, clairement, plutôt que d'afficher des colonnes vides. */
+function aMigrer() {
+  var d = document.createElement('div');
+  var h1 = document.createElement('h1');
+  h1.textContent = 'Le vivier doit remonter au profil';
+  d.appendChild(h1);
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc';
+  p.innerHTML = 'La table <b>Vivier_profils</b> n\'existe pas encore dans ce document. '
+    + 'Tant qu\'elle manque, le vivier se saisirait formation par formation — '
+    + 'c\'est-à-dire en répartissant une seule population sur plusieurs lignes, '
+    + 'ce qu\'aucune répartition ne rend juste.';
+  d.appendChild(p);
+  var q = document.createElement('p');
+  q.className = 'note';
+  q.innerHTML = 'Le script <code>vivier_par_profil_grist.js</code> crée la table, reprend les '
+    + 'viviers déjà saisis, et passe la capacité d\'un intervenant en heures par an plutôt '
+    + 'qu\'en sessions. Il se colle dans la console du navigateur, sur la page du document, '
+    + 'et démarre en essai à blanc.';
+  d.appendChild(q);
+  var r = document.createElement('p');
+  r.className = 'note';
+  r.textContent = 'Les deux autres onglets, Recrutement et Salles, fonctionnent sans lui — '
+    + 'le recrutement affichera simplement des zéros tant que la table manque.';
+  d.appendChild(r);
+  return d;
 }
 
 function aide() {
   var p = document.createElement('p');
   p.className = 'aide';
-  p.innerHTML = 'Deux colonnes à saisir : les intervenants de ce profil aujourd\'hui autorisés '
-    + 'sur la formation, et les départs déjà connus. La troisième ne sert que si la formation '
-    + 's\'écarte du rythme général de sessions par intervenant. Tout le reste est calculé par '
-    + 'le document. <kbd>↑</kbd> <kbd>↓</kbd> passent d\'une formation à l\'autre dans la même '
+  p.innerHTML = 'Deux colonnes à saisir : les intervenants de ce profil aujourd\'hui autorisés, '
+    + 'et les départs déjà connus. La troisième ne sert que si ce profil s\'écarte du nombre '
+    + 'd\'heures que le paramètre général prête à un intervenant. Tout le reste est calculé par '
+    + 'le document. <kbd>↑</kbd> <kbd>↓</kbd> passent d\'un profil à l\'autre dans la même '
     + 'colonne, <kbd>Échap</kbd> annule la frappe.';
   return p;
 }
 
 /* ----------------------------------------- rafraîchissement sans re-rendu */
+/* Chaque case porte le récord qu'elle affiche : on la retrouve par son
+   identifiant et non par sa position, donc l'ordre peut changer sans que la
+   frappe en cours se retrouve ailleurs. */
 function rafraichir() {
   var page = OF.$('page'), actif = document.activeElement;
-  var lignes = vivierDe(idAnnee).filter(function (v) { return v.ressource === profilCourant; });
-  if (!profilCourant || !page.querySelector('tbody')) { rendrePage(); rendreRail(); return; }
-  /* l'ordre d'affichage est figé tant qu'on n'a pas re-rendu : on retrouve
-     chaque ligne par sa position, et on ne touche pas au champ en cours */
-  var rangs = page.querySelectorAll('tbody tr');
-  Array.prototype.forEach.call(rangs, function (tr, i) {
-    var champs = tr.querySelectorAll('.champ');
-    var v = lignesOrdonnees(lignes)[i];
-    if (!v) return;
-    [['vivier_actuel', 0], ['departs_connus', 1], ['sessions_par_intervenant', 2]]
-      .forEach(function (c) {
-        var el = champs[c[1]];
-        if (!el || el === actif) return;
-        el.value = (v[c[0]] || v[c[0]] === 0) ? OF.dec(v[c[0]]) : '';
-      });
-    var cal = tr.querySelectorAll('.calcul');
-    var vals = [v.nb_sessions, v.interventions_requises, v.vivier_net,
-      v.interventions_manquantes, v.a_recruter, v.candidats_a_rechercher];
-    Array.prototype.forEach.call(cal, function (td, j) {
-      if (j >= vals.length) return;
-      var val = vals[j];
-      td.textContent = (val || val === 0) ? (j >= 4 ? OF.ent(val) : OF.dec(val)) : '—';
-    });
+  var champs = page.querySelectorAll('[data-rec]');
+  if (!champs.length) { rendrePage(); rendreRail(); return; }
+  var parId = OF.parId(OF.table('Vivier_profils'));
+  Array.prototype.forEach.call(champs, function (el) {
+    var r = parId[+el.dataset.rec];
+    if (!r || el === actif) return;
+    var val = r[el.dataset.colonne];
+    if (el.classList.contains('champ')) {
+      el.value = (val || val === 0) && !(el.dataset.vide === '1' && !val) ? OF.dec(val) : '';
+      el.classList.toggle('vide-attendu',
+        el.dataset.colonne === 'vivier_actuel' && !!r.heures_requises && !r.vivier_actuel);
+      return;
+    }
+    if (el.dataset.texte === '1') { el.textContent = OF.texte(val); return; }
+    el.textContent = (val || val === 0) ? (el.dataset.ent === '1' ? OF.ent(val) : OF.dec(val)) : '—';
+    if (el.dataset.colonne === 'a_recruter') {
+      el.style.color = val ? 'var(--alerte)' : '';
+      el.style.fontWeight = val ? '600' : '';
+    }
+    if (el.dataset.colonne === 'vivier_net') {
+      el.style.color = r.heures_requises && (val || 0) < parametre('vivier_minimum')
+        ? 'var(--alerte)' : '';
+    }
   });
+  /* la dérivation et le pied de tableau tiennent des chiffres dérivés qu'on
+     ne peut pas remettre à jour case par case : on les redessine */
+  if (profilCourant) {
+    var P = ligneProfil(profilCourant);
+    var anc = page.querySelector('table.derivation');
+    if (P && anc) anc.parentNode.replaceChild(derivation(P), anc);
+  }
   rendreRail();
-}
-function lignesOrdonnees(lignes) {
-  return lignes.slice().sort(function (a, b) {
-    return (b.a_recruter || 0) - (a.a_recruter || 0)
-      || (b.interventions_manquantes || 0) - (a.interventions_manquantes || 0)
-      || OF.texte(nom('Formations', a.formation, '')).localeCompare(
-           OF.texte(nom('Formations', b.formation, '')), 'fr');
-  });
 }
 
 /* ----------------------------------------------- compléter les lignes --- */
+/* Deux choses à compléter, et il faut les distinguer : les lignes de demande
+   (une par formation × profil, calculées) et les lignes de vivier (une par
+   profil, saisies). */
 function completer() {
-  var aCreer = manquants();
-  if (!aCreer.length) { OF.signaler('Rien à compléter : toutes les lignes existent'); return; }
-  OF.appliquer(aCreer.map(function (m) {
+  var demandes = manquants();
+  var profils = profilsSansLigne();
+  if (!demandes.length && !profils.length) {
+    OF.signaler('Rien à compléter : toutes les lignes existent');
+    return;
+  }
+  var actions = demandes.map(function (m) {
     return ['AddRecord', 'Vivier', null,
       { annee: idAnnee, formation: m.formation, ressource: m.ressource }];
-  }), RELIRE, function () { rendreRail(); rendrePage(); });
+  }).concat(profils.map(function (r) {
+    return ['AddRecord', 'Vivier_profils', null, { annee: idAnnee, ressource: r }];
+  }));
+  OF.appliquer(actions, RELIRE, function () {
+    rendreRail(); rendrePage();
+    var dit = [];
+    if (profils.length) dit.push(OF.plur(profils.length, 'ligne') + ' de vivier');
+    if (demandes.length) dit.push(OF.plur(demandes.length, 'ligne') + ' de demande');
+    OF.signaler(dit.join(' et ') + ' ' + OF.accord(actions.length, 'ajoutée', 'ajoutées'));
+  });
 }
 
 /* ------------------------------------------------------------- montage -- */
