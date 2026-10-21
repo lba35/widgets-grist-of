@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=17">
+<link rel="stylesheet" href="commun.css?v=19">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=17"></script>
+<script src="commun.js?v=19"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v17';
+var VERSION = 'v19';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -883,10 +883,10 @@ function pointMort(f) {
   var prixPlace = 0, source = '';
   if (places && recette) {
     prixPlace = recette / places;
-    source = 'Au prix moyen réellement projeté en ' + an.annee;
+    source = 'ventes';            // ce qui est réellement vendu prime
   } else if (reference && f.nb_jours) {
     prixPlace = reference * f.nb_jours;
-    source = 'Au tarif de référence du document';
+    source = 'reference';         // à défaut, le tarif de référence du document
   }
 
   var p = document.createElement('p');
@@ -909,14 +909,104 @@ function pointMort(f) {
   h.textContent = 'À partir de combien de places une session se paie';
   zone.appendChild(h);
 
-  p.innerHTML = 'Une session coûte <b>' + OF.eur(cout) + '</b>. ' + OF.echappe(source)
-    + ' — <b>' + OF.eur(prixPlace) + ' la place</b> — elle se paie à partir de <b>'
-    + OF.plur(seuil, 'place') + '</b>'
-    + (capacite ? ' sur ' + OF.ent(capacite) + ', soit ' + Math.round(100 * seuil / capacite)
-      + ' % de remplissage' : '') + '.'
-    + (sessions ? ' Les projections ' + an.annee + ' vendent en moyenne <b>'
-      + OF.dec(moyenne) + '</b> ' + OF.accord(moyenne, 'place', 'places') + ' par session.' : '');
-  zone.appendChild(p);
+  var intro = document.createElement('p');
+  intro.className = 'note';
+  intro.style.maxWidth = '78ch';
+  intro.textContent = 'Animation et support sont facturés par session : une session coûte le '
+    + 'même prix qu\'elle soit pleine ou vide, et ouvrir des sessions supplémentaires ne change '
+    + 'rien au signe du résultat. Le seuil se joue donc sur les places vendues par session, et '
+    + 'il se calcule ainsi :';
+  zone.appendChild(intro);
+
+  /* Le calcul posé, ligne à ligne, avec les nombres qui l'alimentent : le
+     résultat seul n'est pas vérifiable, et un chiffre qu'on ne peut pas
+     refaire soi-même ne se décide pas. */
+  var etapes = [];
+  etapes.push({
+    libelle: 'Ce que coûte une session',
+    detail: [f.cout_animation ? 'animation ' + OF.eur(f.cout_animation) : '',
+      f.cout_support ? 'support et gestion ' + OF.eur(f.cout_support) : '']
+      .filter(Boolean).join('  +  '),
+    valeur: OF.eur(cout), fort: true
+  });
+
+  if (source === 'ventes') {
+    etapes.push({
+      libelle: 'Ce que rapporte une place, en moyenne',
+      detail: OF.eur(recette) + ' de recettes ' + an.annee + ' ÷ '
+        + OF.plur(places, 'place') + ' ' + OF.accord(places, 'vendue', 'vendues')
+        + (intra.length ? ' (inter et intra confondus)' : ''),
+      valeur: OF.eur(prixPlace), fort: true
+    });
+  } else {
+    etapes.push({
+      libelle: 'Ce que rapporterait une place',
+      detail: 'tarif de référence ' + OF.eur(reference) + ' par jour et par apprenant, '
+        + 'revalorisé pour ' + an.annee + '  ×  ' + OF.plur(f.nb_jours, 'jour')
+        + ' de formation — aucune vente n\'est encore projetée',
+      valeur: OF.eur(prixPlace), fort: true
+    });
+  }
+
+  etapes.push({
+    libelle: 'Places nécessaires pour couvrir le coût',
+    detail: OF.eur(cout) + ' ÷ ' + OF.eur(prixPlace) + ' = ' + OF.dec(cout / prixPlace)
+      + (Math.abs(cout / prixPlace - seuil) > 0.001 ? ', arrondi à la place supérieure' : ''),
+    valeur: OF.plur(seuil, 'place'), fort: true
+  });
+
+  if (capacite) {
+    etapes.push({
+      libelle: 'Soit un remplissage de',
+      detail: OF.ent(seuil) + ' ' + OF.accord(seuil, 'place', 'places') + ' sur les '
+        + OF.ent(capacite) + ' ouvertes par session'
+        + (impossible ? ' — la session n\'en contient pas assez' : ''),
+      valeur: Math.round(100 * seuil / capacite) + ' %',
+      classe: impossible ? 'negatif' : ''
+    });
+  }
+  if (sessions) {
+    etapes.push({
+      libelle: 'Ce qui est vendu aujourd\'hui',
+      detail: OF.plur(places, 'place') + ' sur ' + OF.plur(sessions, 'session')
+        + ' en ' + an.annee,
+      valeur: OF.dec(moyenne) + ' par session',
+      classe: moyenne >= seuil ? 'positif' : 'negatif'
+    });
+  }
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.style.marginTop = '12px';
+  var corps = document.createElement('tbody');
+  etapes.forEach(function (e) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = e.libelle;
+    if (e.fort) td.style.fontWeight = '600';
+    if (e.detail) {
+      var s = document.createElement('div');
+      s.className = 'second';
+      s.textContent = e.detail;
+      td.appendChild(s);
+    }
+    tr.appendChild(td);
+    var tdv = document.createElement('td');
+    tdv.className = 'calcul calcule';
+    if (e.fort) { tdv.style.fontWeight = '600'; tdv.style.color = 'var(--encre)'; }
+    /* .calcul impose sa couleur sourde : on la surcharge ici plutôt que de
+       jouer à la spécificité dans la feuille de style */
+    if (e.classe) {
+      tdv.style.color = e.classe === 'positif' ? 'var(--fait)' : 'var(--alerte)';
+      tdv.style.fontWeight = '600';
+    }
+    tdv.textContent = e.valeur;
+    tr.appendChild(tdv);
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(t);
 
   /* L'échelle va jusqu'au plus grand des trois : la capacité, le point mort,
      ce qui est vendu. Écraser un point mort hors capacité contre le bord

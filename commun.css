@@ -406,3 +406,15 @@ button.lien:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
   .fiche > h1, .fiche > .vide { margin-top: 18px; }
   .barre { flex-wrap: wrap; gap: 8px; }
 }
+
+/* ------------------------------------------------- sections du pilotage -- */
+/* L'écran est long : il lui faut une colonne vertébrale, pas une suite de
+   blocs de même poids. */
+.section-pilotage { margin: 38px 0 18px; padding-top: 20px;
+  border-top: 2px solid var(--trait-fort); }
+.section-pilotage:first-of-type { margin-top: 26px; }
+.section-pilotage h2 { margin: 0 0 4px; font-size: 16px; }
+.section-pilotage .note { margin: 0; max-width: 76ch; }
+/* une ligne simulée ne se confond pas avec une ligne réelle */
+.matrice tr.simule td { background: var(--papier); font-style: italic; }
+.matrice tr.simule td.gauche { white-space: pre; }

@@ -163,7 +163,32 @@ par session que calcule le document.
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
 
-## Hypothèses de remplissage
+## L'onglet Projection
+
+Cinq sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
+résultat, tableau complet), **De quoi elle est faite** (par domaine, puis la rentabilité
+formation par formation), **Ce qui peut encore bouger** (part des places déjà affectée, puis
+les hypothèses), **Scénarios**, **Ce que l'on vise** (les objectifs).
+
+Le taux que le document appelle `remplissage_inter` est affiché comme ce qu'il est : la **part
+des places ouvertes déjà affectée** à un segment. Les places étant attribuées comme si tout se
+vendait, ce n'est pas une prévision de ventes mais l'avancement de la projection. Les deux
+notions portent des noms distincts dans l'écran, pour ne plus être confondues.
+
+## Scénarios
+
+Affecter les places formation par formation pour chaque année à venir est long, et prématuré
+tant qu'on ne sait pas si l'année tient la route. Un scénario part d'une année réellement
+projetée et lui applique une progression annuelle : sessions, places, recettes et coûts
+croissent ensemble, puisque dans ce document la recette suit les places et le coût suit les
+sessions.
+
+Les années déjà projetées gardent leurs chiffres réels — un scénario ne les écrase pas, et
+n'écrit rien dans le document. Les années simulées sont marquées comme telles. Pour transformer
+un scénario en projection saisie, c'est le « Reprendre » de chaque fiche qui le fait, avec le
+même calcul.
+
+## Hypothèses de réalisation
 
 Deux taux, posés dans le pilotage et enregistrés dans `Parametres` sous les clés
 `remplissage_pessimiste` et `remplissage_optimiste` : tout le document en dispose, pas seulement
