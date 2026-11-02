@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=33">
+<link rel="stylesheet" href="commun.css?v=34">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=33"></script>
-<script src="graphes.js?v=33"></script>
+<script src="commun.js?v=34"></script>
+<script src="graphes.js?v=34"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v33';
+var VERSION = 'v34';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -1114,15 +1114,41 @@ function tuilesAnnee(a) {
 /* Les trois taux, sur une échelle commune. L'attendu est un repère, pas une
    quatrième barre : il dit où l'on devrait être, pas ce qu'on a fait. */
 function tauxAnnee(a, r) {
+  /* À quoi rapporter le vendu : la projection d'abord, l'objectif à défaut.
+     Beaucoup d'années ont un objectif sans projection détaillée — l'année en
+     cours notamment, quand le plan commence l'année suivante. */
   var base = a.recettes || 0;
+  var origine = 'la projection';
+  if (!base && a.objectif_ca) { base = a.objectif_ca; origine = 'l\'objectif de recettes'; }
   var zone = document.createElement('div');
 
   if (!base) {
+    /* Sans dénominateur, les taux n'existent pas — mais l'avancement du
+       calendrier, lui, se dit quand même, et les montants aussi. */
     var p = document.createElement('p');
     p.className = 'alerte-bloc';
-    p.textContent = 'Aucune recette projetée pour ' + a.annee + ' : il n\'y a rien à quoi '
-      + 'rapporter le vendu. Les taux ci-dessous n\'auraient pas de dénominateur.';
+    p.innerHTML = '<b>' + a.annee + ' n\'a ni projection ni objectif de recettes</b>, donc '
+      + 'les trois taux n\'ont rien à quoi se rapporter : « ' + OF.eur(a.realise_vendu)
+      + ' vendus sur 0 € prévus » ne voudrait rien dire. Les montants ci-dessous restent '
+      + 'justes, seule la comparaison manque.';
     zone.appendChild(p);
+
+    var q = document.createElement('p');
+    q.className = 'note';
+    q.innerHTML = 'C\'est le cas normal d\'une année antérieure au plan. Pour la comparer '
+      + 'malgré tout, deux chemins : poser un <b>objectif de recettes</b> pour ' + a.annee
+      + ' dans la section « Ce que l\'on vise » de la synthèse — c\'est une seule case à '
+      + 'remplir — ou projeter ses formations comme les autres années.';
+    zone.appendChild(q);
+
+    if (!r.future) {
+      var o = document.createElement('p');
+      o.className = 'note';
+      o.textContent = 'À titre indicatif, ' + Math.round(100 * r.part) + ' % de l\'année '
+        + 'utile ' + a.annee + ' est écoulée (' + r.ecoule + ' jours sur ' + r.total
+        + ', hors ' + r.libelleCreux + ').';
+      zone.appendChild(o);
+    }
     return zone;
   }
 
@@ -1135,7 +1161,7 @@ function tauxAnnee(a, r) {
         : (r.revolue ? 'année révolue'
           : r.ecoule + ' jours utiles sur ' + r.total + ', hors ' + r.libelleCreux) },
     { nom: 'Vendu', part: (a.realise_vendu || 0) / base, juge: true,
-      detail: OF.eur(a.realise_vendu) + ' sur ' + OF.eur(base) + ' projetés' },
+      detail: OF.eur(a.realise_vendu) + ' sur ' + OF.eur(base) + ' — ' + origine },
     { nom: 'Facturé', part: (a.realise_facture || 0) / base,
       detail: OF.eur(a.realise_facture) + ' émis, soit '
         + (a.realise_vendu ? Math.round(100 * (a.realise_facture || 0) / a.realise_vendu) + ' %'
@@ -1175,6 +1201,14 @@ function tauxAnnee(a, r) {
         : '<b>' + ecart + ' points d\'avance</b> sur le rythme attendu, soit '
           + OF.eur(base * ((a.realise_vendu || 0) / base - r.part)) + ' de mieux que prévu.'));
   zone.appendChild(v);
+
+  if (origine !== 'la projection') {
+    var src = document.createElement('p');
+    src.className = 'note';
+    src.innerHTML = a.annee + ' n\'a pas de projection détaillée : les taux se rapportent à '
+      + '<b>' + OF.eur(base) + '</b>, l\'objectif de recettes fixé pour cette année.';
+    zone.appendChild(src);
+  }
 
   var n = document.createElement('p');
   n.className = 'aide';
@@ -1369,6 +1403,8 @@ var LIBELLES_CONNUS = {
   annee: 'Année',
   formation: 'Formation',
   date_debut: 'Début',
+  objectif_ca: 'Objectif de CA',
+  recettes: 'CA projeté (ventes saisies)',
 };
 var COLS_RESOLUES = {};
 function colonneReelle(table, attendu) {
@@ -1396,6 +1432,38 @@ function colonneReelle(table, attendu) {
 function champDe(ligne, table, attendu) {
   var c = colonneReelle(table, attendu);
   return c ? ligne[c] : undefined;
+}
+
+/* UNE FORMULE EN ERREUR NE VAUT PAS ZÉRO
+   Grist renvoie l'erreur d'une cellule sous la forme ['E', 'TypeDErreur', …].
+   Additionnée naïvement, elle disparaît en un zéro qui se lit « rien vendu »
+   alors qu'il faut lire « la colonne ne calcule pas ». On la reconnaît. */
+function estErreur(v) {
+  return Array.isArray(v) && v.length && v[0] === 'E';
+}
+function messageErreur(v) {
+  return estErreur(v) ? (v[1] || 'erreur') + (v[2] ? ' : ' + String(v[2]).slice(0, 120) : '') : '';
+}
+
+/* Les colonnes du réalisé qui seraient en erreur dans le document. */
+function colonnesEnErreur() {
+  var out = [];
+  var T = tableSessions();
+  var voir = function (table, lignes, champs) {
+    champs.forEach(function (c) {
+      var reel = colonneReelle(table, c);
+      if (!reel) return;
+      for (var i = 0; i < lignes.length && i < 200; i++) {
+        if (estErreur(lignes[i][reel])) {
+          out.push({ table: table, colonne: reel, message: messageErreur(lignes[i][reel]) });
+          return;
+        }
+      }
+    });
+  };
+  voir('Annees', OF.table('Annees'), CHAMPS_ANNEE);
+  if (T) voir(T, OF.table(T), ['annee', 'formation', 'places_vendues', 'vendu', 'facture_ht']);
+  return out;
 }
 
 /* Grist dérive l'identifiant d'une table de son libellé : exiger une casse
@@ -1454,6 +1522,28 @@ function realiseSection(zone, annees) {
   var a = OF.parId(OF.table('Annees'))[idAnnee];
   if (!a) return;
   annees.concat([a]).forEach(normaliserAnnee);
+
+  var fautives = colonnesEnErreur();
+  if (fautives.length) {
+    var e = document.createElement('p');
+    e.className = 'alerte-bloc';
+    e.innerHTML = '<b>' + OF.plur(fautives.length, 'colonne') + ' du document '
+      + OF.accord(fautives.length, 'est en erreur', 'sont en erreur') + '</b>, et '
+      + OF.accord(fautives.length, 'sa valeur', 'leurs valeurs')
+      + ' ne vaut donc pas zéro : rien n\'est calculé. '
+      + fautives.map(function (f) {
+          return '<br><code>' + OF.echappe(f.table + '.' + f.colonne) + '</code> — '
+            + OF.echappe(f.message);
+        }).join('');
+    zone.appendChild(e);
+    var e2 = document.createElement('p');
+    e2.className = 'note';
+    e2.innerHTML = 'Une formule en erreur référence presque toujours un champ sous un nom '
+      + 'qu\'il n\'a pas. Relancer <code>realise_smartof_grist.js</code> corrige les formules '
+      + 'qu\'il pose : il résout chaque nom avant d\'écrire, et refuse de tourner si un champ '
+      + 'manque.';
+    zone.appendChild(e2);
+  }
 
   var c = couverture();
   if (c) {
@@ -1526,7 +1616,8 @@ function realiseSection(zone, annees) {
    Plutôt que de truffer l'écran d'appels à champDe, on recopie une fois les
    valeurs sous les noms que le reste du code attend. */
 var CHAMPS_ANNEE = ['realise_sessions', 'realise_places', 'realise_vendu',
-  'realise_facture', 'reste_a_facturer', 'ecart_vendu', 'taux_realisation'];
+  'realise_facture', 'reste_a_facturer', 'ecart_vendu', 'taux_realisation',
+  'objectif_ca', 'recettes'];
 function normaliserAnnee(a) {
   if (!a || a.__realiseNormalise) return;
   CHAMPS_ANNEE.forEach(function (c) {
