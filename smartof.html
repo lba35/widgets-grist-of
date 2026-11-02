@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=27">
+<link rel="stylesheet" href="commun.css?v=28">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,7 +25,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=27"></script>
+<script src="commun.js?v=28"></script>
 <script>
 /* =========================================================================
    SmartOF → Grist, à la demande.
@@ -60,7 +60,7 @@
    ========================================================================= */
 'use strict';
 
-var VERSION = 'v27';
+var VERSION = 'v28';
 
 var TABLES = ['Parametres', 'Formations', 'Annees',
   'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures'];
@@ -179,31 +179,100 @@ function encoreDesPages(page, curseur) {
 /* Parcourt toutes les pages d'une collection. `avance` est rappelé à chaque
    page pour que l'écran montre où on en est : sans ça, un rapatriement de
    deux mille lignes ressemble à un écran figé. */
+/* LE NOM DU PARAMÈTRE DE CURSEUR N'EST PAS CELUI DU CHAMP DE RÉPONSE
+   La réponse porte `pageInfo.nextCursor`, mais la requête n'attend pas
+   forcément `nextCursor=` — et la documentation ne le dit nulle part. Pris
+   pour l'autre, le paramètre devient inconnu ; or cette API ignore les
+   paramètres inconnus en silence et renvoie la première page. La boucle
+   tourne alors sans avancer, indéfiniment. C'est exactement le piège que
+   `filter[...]` nous avait déjà tendu.
+
+   On le découvre donc : on redemande la page suivante sous chaque nom
+   plausible, et on garde celui qui change réellement de contenu. */
+var NOMS_PARAM_CURSEUR = ['cursor', 'after', 'startAfter', 'nextCursor', 'pageToken', 'next'];
+var paramCurseur = null;
+
+function signature(lignes) {
+  var l = lignes && lignes[0];
+  if (!l) return '(vide)';
+  return String(l.sessionUid || l.commanditaireUid || l.factureUid
+    || l.produitFormationUid || l.apprenantUid || l.uid || l.id || JSON.stringify(l).slice(0, 60));
+}
+
+function trouverParamCurseur(chemin, params, curseur, refSignature) {
+  var reste = NOMS_PARAM_CURSEUR.slice();
+  function essayer() {
+    if (!reste.length) return Promise.resolve(null);
+    var nom = reste.shift();
+    var p = {};
+    Object.keys(params || {}).forEach(function (k) { p[k] = params[k]; });
+    p[nom] = curseur;
+    return appeler(chemin, p).then(function (rep) {
+      var lignes = (rep && rep.data) || [];
+      /* avancer, c'est renvoyer autre chose que la page précédente */
+      if (signature(lignes) !== refSignature) return { nom: nom, rep: rep };
+      return essayer();
+    }, function () { return essayer(); });
+  }
+  return essayer();
+}
+
 function parcourir(chemin, params, avance) {
-  var tout = [], vues = 0, pages = 0, nomCurseur = null;
+  var tout = [], vues = 0, pages = 0, derniere = null;
+
+  function absorber(rep) {
+    var lignes = (rep && rep.data) || [];
+    tout = tout.concat(lignes);
+    vues += lignes.length;
+    pages++;
+    if (avance) avance(vues, pages);
+    return lignes;
+  }
+
   function page(curseur) {
     var p = {};
     Object.keys(params || {}).forEach(function (k) { p[k] = params[k]; });
-    if (curseur) p[nomCurseur || 'cursor'] = curseur;
+    if (curseur) p[paramCurseur] = curseur;
     return appeler(chemin, p).then(function (rep) {
-      var lignes = (rep && rep.data) || [];
-      tout = tout.concat(lignes);
-      vues += lignes.length;
-      pages++;
-      if (avance) avance(vues, pages);
-      var c = curseurDe(rep);
-      if (c) nomCurseur = c.nom;
-      /* garde-fou : une API qui renvoie toujours le même curseur ferait
-         tourner la boucle indéfiniment */
-      if (!lignes.length) return tout;
-      if (pages > 200) {
-        throw new Error('Plus de 200 pages parcourues : la pagination ne progresse pas. '
-          + 'Rapatriement interrompu, rien n\'a été écrit.');
-      }
-      if (c && encoreDesPages(rep, c)) return page(c.valeur);
-      return tout;
+      var lignes = absorber(rep);
+      return suite(rep, lignes);
     });
   }
+
+  function suite(rep, lignes) {
+    var sig = signature(lignes);
+    /* Une page identique à la précédente veut dire que le curseur n'est pas
+       pris en compte : on s'arrête tout de suite plutôt qu'au bout de 200
+       tours, et on dit pourquoi. */
+    if (derniere !== null && sig === derniere && lignes.length) {
+      throw new Error('La pagination n\'avance pas : ' + chemin + ' renvoie deux fois la même '
+        + 'page. Le paramètre de curseur « ' + paramCurseur + ' » n\'est pas celui attendu, et '
+        + 'cette API ignore les paramètres qu\'elle ne connaît pas. Rien n\'a été écrit.');
+    }
+    derniere = sig;
+    if (!lignes.length) return tout;
+    if (pages > 500) {
+      throw new Error('Plus de 500 pages sur ' + chemin + ' : rapatriement interrompu par '
+        + 'précaution, rien n\'a été écrit. Restreignez la fenêtre relue.');
+    }
+    var c = curseurDe(rep);
+    if (!c || !encoreDesPages(rep, c)) return tout;
+
+    if (paramCurseur) return page(c.valeur);
+    /* première pagination de la session : on cherche le bon nom une fois */
+    return trouverParamCurseur(chemin, params, c.valeur, sig).then(function (trouve) {
+      if (!trouve) {
+        throw new Error('Aucun nom de paramètre de curseur n\'a fait avancer la pagination sur '
+          + chemin + ' (essayés : ' + NOMS_PARAM_CURSEUR.join(', ') + '). La réponse annonce '
+          + 'pourtant une suite. Rien n\'a été écrit — envoyez-moi la sortie du bouton '
+          + '« Voir une session » et j\'épingle le bon nom.');
+      }
+      paramCurseur = trouve.nom;
+      var l = absorber(trouve.rep);
+      return suite(trouve.rep, l);
+    });
+  }
+
   return page(null);
 }
 
@@ -955,7 +1024,11 @@ function lireProduits(dire, bilan) {
       return liste;
     }).catch(function (e) {
       if (/404|inconnue/i.test(e.message)) return suivant();
-      throw e;
+      /* Les fiches produit sont un complément : une pagination qui coince de
+         leur côté ne doit pas emporter le vendu, pas plus qu'un 404. */
+      bilan.avertissements.push('Produits de formation non repris (' + e.message
+        + '). Le code Gesform n\'a été cherché que sur l\'instance portée par chaque session.');
+      return [];
     });
   }
   return suivant();
@@ -1156,6 +1229,7 @@ window.__smartof = {
   demarrer: function () { OF.initialiser(TABLES, demarrer); },
   parcourir: parcourir, appeler: appeler, curseurDe: curseurDe,
   parametresDeFenetre: parametresDeFenetre, rendre: rendre,
+  paramCurseur: function () { return paramCurseur; },
   vraiNom: vraiNom, tablesVoisines: tablesVoisines, colonnesManquantes: colonnesManquantes,
 };
 </script>

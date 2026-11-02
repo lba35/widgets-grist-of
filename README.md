@@ -199,12 +199,20 @@ que vous ne pourriez écrire à la main.
 | Format de clé | `smk_` + 43 caractères base64url |
 | Chemins | `/v2/<collection>` — sans le `/v2`, une route héritée répond `400 Invalid token format` |
 | Enveloppe | `{ data, pageInfo }` |
-| Pagination | `pageInfo.nextCursor` et `pageInfo.hasMore` |
+| Pagination | la réponse porte `pageInfo.nextCursor` et `pageInfo.hasMore` ; **le paramètre de requête ne s'appelle pas pareil** |
 | Filtres | `filter[champ][op]=valeur` — **un paramètre inconnu est ignoré en silence** |
 
-Le dernier point est un piège : écrire `updatedAt[gte]=…` au lieu de `filter[updatedAt][gte]=…`
-renvoie bien `200`, mais sans filtrer. Chaque rafraîchissement rapatrierait toute la base sans
-le dire.
+Les deux derniers points sont le même piège, et il a mordu deux fois.
+
+Écrire `updatedAt[gte]=…` au lieu de `filter[updatedAt][gte]=…` renvoie bien `200`, mais sans
+filtrer : chaque rafraîchissement rapatrierait toute la base sans le dire.
+
+Et le nom du champ de curseur dans la **réponse** (`nextCursor`) n'est pas celui du paramètre
+dans la **requête**. Passé tel quel, il devient un paramètre inconnu — donc ignoré — et l'API
+renvoie éternellement la première page. Le widget découvre donc le bon nom : il redemande la
+page suivante sous chaque nom plausible (`cursor`, `after`, `startAfter`, `nextCursor`,
+`pageToken`, `next`) et garde celui dont le contenu change réellement. Si aucun ne fait
+avancer, il s'arrête en six appels et le dit, au lieu de tourner en rond.
 
 ### La liaison avec le catalogue
 
