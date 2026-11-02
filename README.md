@@ -1,6 +1,6 @@
 # Widgets Grist — organisme de formation du CHU de Rennes
 
-Trois widgets personnalisés pour le document de projection des ventes. Fichiers statiques,
+Quatre widgets personnalisés pour le document de projection des ventes. Fichiers statiques,
 sans dépendance ni build : on dépose le dossier sur une adresse en https et on colle les URL
 dans Grist.
 
@@ -10,6 +10,7 @@ dans Grist.
 | `fiche.html` | Tout ce qui concerne une formation : définition, public, ressources, coût, projections, ventes intra, validation |
 | `charge.html` | Les moyens à réunir, en trois volets : vivier d'intervenants, recrutement, occupation des salles |
 | `pilotage.html` | La trajectoire commerciale pluriannuelle : recettes, résultat, hypothèses, scénarios, objectifs |
+| `smartof.html` | La reprise du réalisé depuis l'API SmartOF, à la demande, sans CSV |
 | `commun.css` | Jetons visuels et composants partagés |
 | `commun.js` | Plomberie Grist, métadonnées de colonnes, éditeurs, écriture différée |
 | `graphes.js` | Les graphiques du pilotage et de la charge, dessinés en SVG, sans bibliothèque |
@@ -168,6 +169,81 @@ par session que calcule le document.
 
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
+
+## Reprendre le réalisé depuis SmartOF
+
+Le prévisionnel vit dans Grist, le réalisé vit dans SmartOF. Les rapprocher demandait
+d'exporter un CSV et de le réimporter à la main, à chaque fois. `smartof.html` va le chercher
+directement, à la demande — pas de job nocturne, pas de serveur à tenir.
+
+### Où vit la clé, et pourquoi là
+
+Dans la table `Parametres` du document, sous les clés `smartof_base` et `smartof_cle`. **Jamais
+dans le code du widget** : il est servi depuis un dépôt public, n'importe qui peut le lire. Dans
+le document, la clé n'est lisible que par les personnes qui y ont déjà accès.
+
+Ce n'est pas un coffre-fort, et c'est pourquoi **la clé doit être en lecture seule**. L'écran ne
+fait que des `GET` sur SmartOF, il n'a jamais besoin de plus. Si cette exposition n'est pas
+acceptable, il faut un relais sur un serveur que vous tenez — mais c'est un service à héberger
+et à maintenir.
+
+Côté Grist, rien à configurer : l'écran écrit par **votre propre session**, le même mécanisme
+que la saisie d'une fiche. Aucune clé d'API Grist n'est nécessaire, et il ne peut rien écrire
+que vous ne pourriez écrire à la main.
+
+### Ce que l'API a appris
+
+| Point | Valeur |
+|---|---|
+| Authentification | en-tête `Authorization: Bearer <clé>` |
+| Format de clé | `smk_` + 43 caractères base64url |
+| Chemins | `/v2/<collection>` — sans le `/v2`, une route héritée répond `400 Invalid token format` |
+| Enveloppe | `{ data, pageInfo }` |
+| Pagination | `pageInfo.nextCursor` et `pageInfo.hasMore` |
+| Filtres | `filter[champ][op]=valeur` — **un paramètre inconnu est ignoré en silence** |
+
+Le dernier point est un piège : écrire `updatedAt[gte]=…` au lieu de `filter[updatedAt][gte]=…`
+renvoie bien `200`, mais sans filtrer. Chaque rafraîchissement rapatrierait toute la base sans
+le dire.
+
+### La liaison avec le catalogue
+
+Le `customId` d'une session est un numéro de session, il ne raccroche à rien. Ce qui identifie
+la formation, c'est le **produit de formation**, et c'est son `custom_field_20` qui porte le
+code Gesform.
+
+Plutôt qu'un rapprochement calculé à la volée — qui perd en silence tout ce qu'il ne sait pas
+rapprocher — une table `SmartOF_produits` garde une ligne par produit rencontré : son code, son
+intitulé, et une référence vers `Formations`. Le widget la remplit, rapproche automatiquement
+quand le code tombe sur un `Formations.code_gesform` ou un `Formations.code`, et **laisse
+visibles les produits non rapprochés** avec une liste déroulante pour trancher. Un choix fait à
+la main n'est jamais écrasé par un rafraîchissement ultérieur.
+
+### La fenêtre glissante
+
+On relit les enregistrements modifiés depuis N jours — 30 par défaut — plutôt que « depuis la
+dernière fois ». Un rafraîchissement manqué ou une coupure au milieu laisserait sinon un trou
+qu'on ne voit jamais. Le recouvrement est sans effet : chaque enregistrement est reconnu à son
+identifiant SmartOF, rien n'est dupliqué, **rien n'est jamais effacé**.
+
+Le rapport de fin distingue ce qui a été ajouté, corrigé et laissé tel quel. Un second passage
+immédiat doit donner « 0 ajoutée, 0 corrigée » : si ce n'est pas le cas, c'est que la
+comparaison champ à champ a trouvé une vraie différence.
+
+### Ce qu'il écrit
+
+| Table | Clé | Ce qu'elle porte |
+|---|---|---|
+| `SmartOF_produits` | `produit_uid` | code Gesform, intitulé, et la formation du catalogue |
+| `SmartOF_sessions` | `uid` | dates, statut, lieu, produit, code Gesform |
+| `SmartOF_commanditaires` | `uid` | session, entreprise, type, **nombre d'apprenants**, **budget** |
+
+C'est le commanditaire qui porte le vendu : c'est par lui que les apprenants sont inscrits, et
+c'est lui qui porte le budget.
+
+Les colonnes manquantes sont listées à l'écran, avec un bouton qui les crée. Les tables
+absentes, elles, sont signalées sans être créées : ajouter une table est une décision de
+structure, pas un effet de bord d'un widget.
 
 ## Interne et externe
 
@@ -410,7 +486,8 @@ Lues : `Annees`, `Formations`, `Projections`, `Ventes_inter`, `Ventes_intra`, `S
 `Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Vivier_profils`, `Charge`, `Salles`,
 `Types_salles`, `Besoins_salles`, `Tarifs`, `Categories_tarifaires`, `Parametres`.
 
-Écrites : `Formations` (définition, périmètre forcé), `Projections` et `Ventes_inter` (sessions et places),
+Écrites : `SmartOF_produits`, `SmartOF_sessions`, `SmartOF_commanditaires` (reprise du
+réalisé), `Formations` (définition, périmètre forcé), `Projections` et `Ventes_inter` (sessions et places),
 `Besoins_salles` (type de salle, nombre, jours), `Intervenants_formation` (profils mobilisés),
 `Vivier_profils` (vivier, départs, heures par intervenant), `Salles` (jours disponibles par
 type et par année), `Annees`

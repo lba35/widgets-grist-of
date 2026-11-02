@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=24">
+<link rel="stylesheet" href="commun.css?v=25">
 <style>
   body { overflow-y: auto; }
   .enveloppe { max-width: 74ch; margin: 0 auto; padding: 48px 24px 72px; }
@@ -30,9 +30,9 @@
 <body>
 <div class="enveloppe">
   <h1>Widgets Grist de l'organisme de formation</h1>
-  <p class="intro">Trois widgets personnalisés pour le document de projection des ventes :
-    décrire et projeter une formation, réunir les moyens (intervenants et salles), et piloter la
-    trajectoire. Ils lisent
+  <p class="intro">Quatre widgets personnalisés pour le document de projection des ventes :
+    décrire et projeter une formation, réunir les moyens (intervenants et salles), piloter la
+    trajectoire, et reprendre le réalisé depuis SmartOF. Ils lisent
     et écrivent le document directement — aucun chiffre n'est recalculé ici, tout vient des
     colonnes formules.</p>
 
@@ -66,6 +66,15 @@
         part à vendre, et une hypothèse basse et haute à paramétrer ; des scénarios à essayer
         sans rien ressaisir ; et les objectifs à fixer, année par année.</p>
       <span class="url" data-url="pilotage.html"></span>
+    </a>
+    <a class="carte" href="smartof.html">
+      <h2>SmartOF</h2>
+      <p>La reprise du réalisé, à la demande. L'adresse et la clé vivent dans la table
+        Parametres du document — jamais dans ce code, qui est public. Un bouton va chercher
+        les sessions et les commanditaires chez SmartOF et les écrit dans le document, sans
+        rien effacer. La liaison au catalogue se fait par le code Gesform lu dans
+        <code>custom_field_20</code> ; ce qui n'est pas rapproché reste visible à l'écran.</p>
+      <span class="url" data-url="smartof.html"></span>
     </a>
   </div>
 

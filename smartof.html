@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartOF — reprise du réalisé</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="commun.css?v=25">
+</head>
+<body>
+<div id="app" aria-busy="true">
+  <div class="barre">
+    <h1 class="barre-titre">SmartOF</h1>
+    <div class="avance" id="avance"></div>
+    <div class="nav">
+      <button class="outil" id="rafraichir" type="button"
+              title="Aller chercher le réalisé et l'écrire dans le document">Rafraîchir le vendu</button>
+    </div>
+  </div>
+  <div class="corps">
+    <div class="fiche" id="page"><p class="vide">Chargement du document…</p></div>
+  </div>
+</div>
+<div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
+
+<script src="commun.js?v=25"></script>
+<script>
+/* =========================================================================
+   SmartOF → Grist, à la demande.
+
+   POURQUOI CET ÉCRAN EXISTE
+   Le réalisé vit dans SmartOF, la projection vit dans Grist. Les rapprocher
+   demandait jusqu'ici d'exporter un CSV et de le réimporter à la main, à
+   chaque fois. Cet écran va le chercher directement.
+
+   OÙ EST LA CLÉ, ET POURQUOI LÀ
+   Dans la table `Parametres` du document, pas dans ce fichier : il est servi
+   depuis un dépôt public, tout le monde peut le lire. Dans le document, elle
+   n'est lisible que par les personnes qui ont déjà accès au document. Ce
+   n'est pas un coffre-fort : c'est pourquoi la clé doit être EN LECTURE
+   SEULE. Cet écran ne fait que des GET sur SmartOF, il n'a jamais besoin de
+   plus.
+
+   CE QU'IL ÉCRIT, ET AVEC QUELS DROITS
+   Il écrit dans Grist par votre propre session — le même mécanisme que la
+   saisie d'une fiche. Aucune clé d'API Grist n'est nécessaire, et vous ne
+   pouvez rien écrire que vous ne pourriez écrire à la main.
+
+   CE QU'IL N'EFFACE JAMAIS
+   Rien. Il ajoute les enregistrements nouveaux, corrige ceux qui ont changé,
+   et laisse les autres tels quels. Le repère est l'identifiant SmartOF.
+
+   POURQUOI UNE FENÊTRE GLISSANTE ET NON « DEPUIS LA DERNIÈRE FOIS »
+   Un rafraîchissement manqué, une erreur réseau au milieu, et « depuis la
+   dernière fois » laisse un trou qu'on ne voit jamais. Une fenêtre qui
+   recouvre les derniers jours rattrape ces trous, et la déduplication sur
+   l'identifiant rend le recouvrement sans effet.
+   ========================================================================= */
+'use strict';
+
+var VERSION = 'v25';
+
+var TABLES = ['Parametres', 'Formations', 'Annees',
+  'SmartOF_sessions', 'SmartOF_commanditaires'];
+var RELIRE = ['SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires', 'Parametres'];
+
+/* Les clés de configuration, dans Parametres. */
+var CLE_BASE = 'smartof_base';
+var CLE_JETON = 'smartof_cle';
+var CLE_DERNIER = 'smartof_dernier_rafraichissement';
+
+var dernierRapport = null, enCours = false;
+
+/* ------------------------------------------------- lecture des réglages -- */
+function reglage(cle) {
+  var p = OF.table('Parametres').filter(function (x) { return OF.texte(x.cle) === cle; })[0];
+  if (!p) return '';
+  /* Parametres porte `valeur` (numérique) et parfois `texte` : une adresse et
+     une clé ne sont pas des nombres, on prend ce qui est lisible. */
+  return OF.texte(p.texte) || OF.texte(p.description_valeur) || OF.texte(p.valeur) || '';
+}
+function ligneReglage(cle) {
+  return OF.table('Parametres').filter(function (x) { return OF.texte(x.cle) === cle; })[0] || null;
+}
+function colonneTexteParametres() {
+  var meta = OF.doc.colonnes.Parametres || {};
+  return meta.texte ? 'texte' : null;
+}
+function ecrireReglage(cle, valeur) {
+  var col = colonneTexteParametres();
+  if (!col) {
+    OF.signaler('La table Parametres n\'a pas de colonne texte : rien n\'a été enregistré', true);
+    return Promise.resolve();
+  }
+  var l = ligneReglage(cle);
+  var champs = { cle: cle };
+  champs[col] = valeur;
+  return OF.appliquer(
+    [l ? ['UpdateRecord', 'Parametres', l.id, champs]
+       : ['AddRecord', 'Parametres', null, champs]],
+    ['Parametres'], function () { rendre(); });
+}
+
+function base() { return reglage(CLE_BASE).replace(/\/+$/, ''); }
+function jeton() { return reglage(CLE_JETON).trim(); }
+function configure() { return !!(base() && jeton()); }
+
+/* ------------------------------------------------------- appels SmartOF -- */
+/* Un seul endroit qui parle à SmartOF : tout le reste passe par ici, donc
+   une erreur se diagnostique au même endroit quelle que soit la collection. */
+function appeler(chemin, params) {
+  var url = base() + chemin;
+  var q = Object.keys(params || {}).map(function (k) {
+    return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+  });
+  if (q.length) url += (url.indexOf('?') >= 0 ? '&' : '?') + q.join('&');
+  return fetch(url, { headers: { Authorization: 'Bearer ' + jeton() } })
+    .then(function (r) {
+      return r.text().then(function (txt) {
+        var j = null;
+        try { j = JSON.parse(txt); } catch (e) { /* pas du JSON */ }
+        if (!r.ok) throw new Error(diagnostic(r.status, j, txt));
+        return j;
+      });
+    }, function (e) {
+      /* Le navigateur ne dit jamais « CORS » à JavaScript : il dit seulement
+         que la requête a échoué. Autant nommer les deux causes possibles. */
+      throw new Error('La requête n\'a pas abouti (' + (e && e.message ? e.message : e)
+        + '). Soit l\'adresse est fausse, soit SmartOF refuse les appels venus '
+        + 'de cette page.');
+    });
+}
+
+function diagnostic(statut, j, txt) {
+  var msg = (j && (j.message || j.error)) || txt.slice(0, 200) || '';
+  if (statut === 400 && /token/i.test(msg)) {
+    return 'SmartOF refuse le jeton (400) : « ' + msg + ' ». La clé attendue commence '
+      + 'par smk_ et compte 43 caractères ensuite. Vérifiez aussi qu\'aucune espace '
+      + 'ne s\'est glissée au collage.';
+  }
+  if (statut === 401 || statut === 403) {
+    return 'SmartOF refuse l\'accès (' + statut + ') : « ' + msg + ' ». La clé est '
+      + 'probablement révoquée, ou ne couvre pas cette collection.';
+  }
+  if (statut === 404) {
+    return 'Collection inconnue (404) : « ' + msg + ' ». L\'adresse de base est '
+      + 'peut-être incomplète — elle doit se terminer par /external/api.';
+  }
+  return 'SmartOF a répondu ' + statut + ' : ' + msg;
+}
+
+/* La clé du curseur n'est pas documentée : on prend celle que la réponse
+   porte réellement, plutôt que d'en coder une en dur qui changerait un jour. */
+var CLES_CURSEUR = ['nextCursor', 'endCursor', 'next', 'cursor', 'nextPageToken', 'pageToken'];
+var CLES_ENCORE = ['hasNextPage', 'hasMore', 'more'];
+
+function curseurDe(page) {
+  var info = (page && page.pageInfo) || {};
+  for (var i = 0; i < CLES_CURSEUR.length; i++) {
+    var v = info[CLES_CURSEUR[i]];
+    if (v) return { nom: CLES_CURSEUR[i], valeur: v };
+  }
+  return null;
+}
+function encoreDesPages(page, curseur) {
+  var info = (page && page.pageInfo) || {};
+  for (var i = 0; i < CLES_ENCORE.length; i++) {
+    if (info[CLES_ENCORE[i]] === false) return false;
+    if (info[CLES_ENCORE[i]] === true) return true;
+  }
+  return !!curseur;
+}
+
+/* Parcourt toutes les pages d'une collection. `avance` est rappelé à chaque
+   page pour que l'écran montre où on en est : sans ça, un rapatriement de
+   deux mille lignes ressemble à un écran figé. */
+function parcourir(chemin, params, avance) {
+  var tout = [], vues = 0, pages = 0, nomCurseur = null;
+  function page(curseur) {
+    var p = {};
+    Object.keys(params || {}).forEach(function (k) { p[k] = params[k]; });
+    if (curseur) p[nomCurseur || 'cursor'] = curseur;
+    return appeler(chemin, p).then(function (rep) {
+      var lignes = (rep && rep.data) || [];
+      tout = tout.concat(lignes);
+      vues += lignes.length;
+      pages++;
+      if (avance) avance(vues, pages);
+      var c = curseurDe(rep);
+      if (c) nomCurseur = c.nom;
+      /* garde-fou : une API qui renvoie toujours le même curseur ferait
+         tourner la boucle indéfiniment */
+      if (!lignes.length) return tout;
+      if (pages > 200) {
+        throw new Error('Plus de 200 pages parcourues : la pagination ne progresse pas. '
+          + 'Rapatriement interrompu, rien n\'a été écrit.');
+      }
+      if (c && encoreDesPages(rep, c)) return page(c.valeur);
+      return tout;
+    });
+  }
+  return page(null);
+}
+
+/* ------------------------------------------------------------- rendu --- */
+function rendre() {
+  var page = OF.$('page');
+  page.innerHTML = '';
+  page.appendChild(sectionConnexion());
+  page.appendChild(sectionColonnes());
+  if (configure()) {
+    page.appendChild(sectionStructure());
+    page.appendChild(sectionRafraichir());
+  }
+  if (dernierRapport) page.appendChild(sectionRapport(dernierRapport));
+  page.appendChild(sectionCorrespondance());
+  rendreAvance();
+}
+
+function titre(t, sous) {
+  var d = document.createElement('div');
+  d.className = 'section-pilotage';
+  var h = document.createElement('h2');
+  h.textContent = t;
+  d.appendChild(h);
+  if (sous) {
+    var p = document.createElement('p');
+    p.className = 'sous';
+    p.textContent = sous;
+    d.appendChild(p);
+  }
+  return d;
+}
+
+function sectionConnexion() {
+  var zone = document.createElement('div');
+  zone.appendChild(titre('La connexion',
+    'L\'adresse et la clé vivent dans la table Parametres du document, jamais dans ce '
+    + 'fichier : il est servi depuis un dépôt public.'));
+
+  var g = document.createElement('div');
+  g.className = 'grille';
+  g.appendChild(champReglage(CLE_BASE, 'Adresse de l\'API',
+    'https://europe-west3-votre-instance.cloudfunctions.net/external/api'));
+  g.appendChild(champReglage(CLE_JETON, 'Clé d\'intégration (lecture seule)', 'smk_…', true));
+  zone.appendChild(g);
+
+  var b = document.createElement('div');
+  b.style.marginTop = '14px';
+  var test = document.createElement('button');
+  test.type = 'button';
+  test.className = 'outil';
+  test.textContent = 'Tester la connexion';
+  test.disabled = !configure();
+  test.addEventListener('click', function () { testerConnexion(test); });
+  b.appendChild(test);
+  zone.appendChild(b);
+
+  var r = document.createElement('p');
+  r.id = 'resultat-test';
+  r.className = 'note';
+  r.style.marginTop = '10px';
+  zone.appendChild(r);
+
+  if (!colonneTexteParametres()) {
+    var m = document.createElement('p');
+    m.className = 'alerte-bloc';
+    m.style.marginTop = '12px';
+    m.textContent = 'La table Parametres n\'a pas de colonne texte, et ses colonnes existantes '
+      + 'sont numériques : une adresse et une clé ne peuvent pas y tenir. La section '
+      + 'ci-dessous propose de la créer ; les deux champs restent inactifs jusque-là.';
+    zone.appendChild(m);
+  } else if (!configure()) {
+    var a = document.createElement('p');
+    a.className = 'alerte-bloc';
+    a.style.marginTop = '12px';
+    a.textContent = 'Renseignez l\'adresse et la clé pour aller plus loin. La clé doit être '
+      + 'en lecture seule : cet écran ne fait que des GET, et toute personne ayant accès au '
+      + 'document pourra la lire.';
+    zone.appendChild(a);
+  }
+  return zone;
+}
+
+function champReglage(cle, libelle, exemple, secret) {
+  var bloc = document.createElement('div');
+  bloc.className = 'bloc';
+  var l = document.createElement('label');
+  l.textContent = libelle;
+  l.htmlFor = 'r-' + cle;
+  bloc.appendChild(l);
+  var el = document.createElement('input');
+  el.id = 'r-' + cle;
+  el.className = 'champ';
+  el.style.width = '100%';
+  el.style.textAlign = 'left';
+  el.type = secret ? 'password' : 'text';
+  el.placeholder = exemple;
+  el.autocomplete = 'off';
+  el.spellcheck = false;
+  el.value = reglage(cle);
+  var origine = el.value;
+  el.disabled = !colonneTexteParametres();
+  el.addEventListener('change', function () {
+    if (el.value.trim() === origine) return;
+    ecrireReglage(cle, el.value.trim()).then(function () {
+      if (colonneTexteParametres()) OF.signaler(libelle + ' enregistré' + (secret ? 'e' : ''));
+    });
+  });
+  bloc.appendChild(el);
+  if (secret) {
+    var v = document.createElement('button');
+    v.type = 'button';
+    v.className = 'lien';
+    v.style.marginTop = '4px';
+    v.textContent = 'Afficher';
+    v.addEventListener('click', function () {
+      var cache = el.type === 'password';
+      el.type = cache ? 'text' : 'password';
+      v.textContent = cache ? 'Masquer' : 'Afficher';
+    });
+    bloc.appendChild(v);
+  }
+  return bloc;
+}
+
+function testerConnexion(bouton) {
+  var r = OF.$('resultat-test');
+  bouton.disabled = true;
+  r.textContent = 'Appel en cours…';
+  r.className = 'note';
+  appeler('/v2/session_formations', { limit: 1 })
+    .then(function (rep) {
+      var n = (rep && rep.data && rep.data.length) || 0;
+      r.className = 'note';
+      r.innerHTML = '<b style="color:var(--fait)">La connexion fonctionne.</b> '
+        + (n ? 'Un enregistrement a été lu, et l\'enveloppe porte '
+             + Object.keys(rep).join(' et ') + '.'
+             : 'L\'appel aboutit mais ne renvoie aucune session.');
+    })
+    .catch(function (e) {
+      r.className = 'alerte-bloc';
+      r.textContent = e.message;
+    })
+    .then(function () { bouton.disabled = !configure(); });
+}
+
+/* ------------------------------------------------------- la structure -- */
+/* La documentation de SmartOF ne publie ni schéma de réponse ni exemple
+   JSON. Plutôt que de deviner, on va chercher un enregistrement réel et on
+   le montre : c'est à partir de ça que la correspondance se vérifie. */
+function sectionStructure() {
+  var zone = document.createElement('div');
+  zone.appendChild(titre('Ce que SmartOF renvoie vraiment',
+    'Un enregistrement réel, champ par champ. À regarder une fois, pour vérifier que la '
+    + 'correspondance ci-dessous porte bien sur ce qui existe.'));
+
+  ['session_formations', 'commanditaires'].forEach(function (col) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'outil';
+    b.style.marginRight = '8px';
+    b.textContent = col === 'commanditaires' ? 'Voir un commanditaire' : 'Voir une session';
+    b.addEventListener('click', function () { montrerStructure(col, b); });
+    zone.appendChild(b);
+  });
+
+  var sortie = document.createElement('pre');
+  sortie.id = 'structure';
+  sortie.className = 'defilant';
+  sortie.style.cssText = 'margin-top:14px;max-height:360px;overflow:auto;font-size:12px;'
+    + 'line-height:1.5;white-space:pre-wrap;word-break:break-word;';
+  zone.appendChild(sortie);
+  return zone;
+}
+
+function montrerStructure(collection, bouton) {
+  var sortie = OF.$('structure');
+  bouton.disabled = true;
+  sortie.textContent = 'Appel en cours…';
+  appeler('/v2/' + collection, { limit: 1 })
+    .then(function (rep) {
+      var l = rep && rep.data && rep.data[0];
+      if (!l) { sortie.textContent = 'Aucun enregistrement dans cette collection.'; return; }
+      sortie.textContent = 'pageInfo : ' + JSON.stringify(rep.pageInfo) + '\n\n'
+        + JSON.stringify(l, null, 2);
+    })
+    .catch(function (e) { sortie.textContent = e.message; })
+    .then(function () { bouton.disabled = false; });
+}
+
+/* ------------------------------------------------------ rafraîchissement */
+var FENETRES = [
+  { cle: '3', libelle: 'Les 3 derniers jours', jours: 3 },
+  { cle: '30', libelle: 'Les 30 derniers jours', jours: 30 },
+  { cle: '365', libelle: 'La dernière année', jours: 365 },
+  { cle: 'tout', libelle: 'Tout, sans filtre de date', jours: 0 },
+];
+var fenetre = '30';
+
+function sectionRafraichir() {
+  var zone = document.createElement('div');
+  zone.appendChild(titre('Rafraîchir le vendu',
+    'Les enregistrements modifiés depuis la date choisie sont relus. Le recouvrement est '
+    + 'sans effet : rien n\'est dupliqué, chaque enregistrement est reconnu à son identifiant.'));
+
+  var g = document.createElement('div');
+  g.className = 'bloc';
+  g.style.maxWidth = '320px';
+  var l = document.createElement('label');
+  l.textContent = 'Fenêtre relue';
+  l.htmlFor = 'fenetre';
+  g.appendChild(l);
+  var s = document.createElement('select');
+  s.id = 'fenetre';
+  s.className = 'champ';
+  s.style.width = '100%';
+  s.style.textAlign = 'left';
+  s.innerHTML = FENETRES.map(function (f) {
+    return '<option value="' + f.cle + '"' + (f.cle === fenetre ? ' selected' : '') + '>'
+      + OF.echappe(f.libelle) + '</option>';
+  }).join('');
+  s.addEventListener('change', function (ev) { fenetre = ev.target.value; });
+  g.appendChild(s);
+  zone.appendChild(g);
+
+  var dernier = reglage(CLE_DERNIER);
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.style.marginTop = '10px';
+  p.textContent = dernier
+    ? 'Dernier rafraîchissement : ' + dernier + '.'
+    : 'Aucun rafraîchissement enregistré pour l\'instant.';
+  zone.appendChild(p);
+
+  var etat = document.createElement('p');
+  etat.id = 'avancement';
+  etat.className = 'note';
+  etat.style.marginTop = '10px';
+  zone.appendChild(etat);
+  return zone;
+}
+
+function depuis() {
+  var f = FENETRES.filter(function (x) { return x.cle === fenetre; })[0];
+  if (!f || !f.jours) return null;
+  var d = new Date(Date.now() - f.jours * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+function parametresDeFenetre() {
+  var d = depuis();
+  /* La syntaxe est `filter[champ][op]=valeur`. Un paramètre inconnu est
+     ignoré en silence par l'API : écrire `updatedAt[gte]` au lieu de
+     `filter[updatedAt][gte]` ne filtrerait rien et rapatrierait tout sans
+     le dire. D'où cette forme, et pas une autre. */
+  var p = { limit: 200 };
+  if (d) p['filter[updatedAt][gte]'] = d;
+  return p;
+}
+
+function rendreAvance() {
+  OF.$('avance').innerHTML = (configure()
+    ? '<span>' + OF.echappe(base().replace(/^https?:\/\//, '').split('.')[0]) + '</span>'
+    : '<span>non configuré</span>')
+    + '<span class="version" title="Version de smartof.html actuellement servie">'
+    + VERSION + '</span>';
+}
+
+/* ------------------------------------------------- les colonnes d'accueil */
+/* Rien n'est écrit tant que les colonnes n'existent pas : plutôt que
+   d'échouer au milieu d'un rapatriement, on le dit avant, et on propose de
+   les créer. */
+function sectionColonnes() {
+  var manque = colonnesManquantes();
+  var zone = document.createElement('div');
+  if (!manque.length) return zone;
+
+  zone.appendChild(titre('Ce qui manque dans le document',
+    'Le rapatriement a besoin de ces colonnes pour écrire. Il ne crée rien tout seul.'));
+
+  var tablesAbsentes = manque.filter(function (m) { return !m[1]; });
+  if (tablesAbsentes.length) {
+    var a = document.createElement('p');
+    a.className = 'alerte-bloc';
+    a.textContent = OF.plur(tablesAbsentes.length, 'table') + ' ' + OF.accord(tablesAbsentes.length, 'manque', 'manquent')
+      + ' : ' + tablesAbsentes.map(function (m) { return m[0]; }).join(', ')
+      + '. À créer dans le document — un widget ne crée pas de table, c\'est une décision '
+      + 'de structure.';
+    zone.appendChild(a);
+  }
+
+  var colonnes = manque.filter(function (m) { return m[1]; });
+  if (colonnes.length) {
+    var t = document.createElement('table');
+    t.className = 'matrice';
+    t.innerHTML = '<thead><tr><th class="gauche">Table</th><th class="gauche">Colonne</th>'
+      + '<th class="gauche">Type</th><th class="gauche">Libellé</th></tr></thead>';
+    var corps = document.createElement('tbody');
+    colonnes.forEach(function (m) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td class="gauche libelle">' + OF.echappe(m[0]) + '</td>'
+        + '<td class="gauche"><code>' + OF.echappe(m[1][0]) + '</code></td>'
+        + '<td class="gauche second">' + OF.echappe(m[1][1]) + '</td>'
+        + '<td class="gauche second">' + OF.echappe(m[1][2]) + '</td>';
+      corps.appendChild(tr);
+    });
+    t.appendChild(corps);
+    zone.appendChild(defilantLocal(t));
+
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'outil';
+    b.style.marginTop = '12px';
+    b.textContent = 'Créer ces ' + OF.plur(colonnes.length, 'colonne');
+    b.addEventListener('click', function () { creerCeQuiManque(b); });
+    zone.appendChild(b);
+  }
+  return zone;
+}
+
+function defilantLocal(t) {
+  var d = document.createElement('div');
+  d.className = 'defilant';
+  d.appendChild(t);
+  return d;
+}
+
+/* ------------------------------------------------- la correspondance vue */
+function sectionCorrespondance() {
+  var zone = document.createElement('div');
+  var produits = OF.table('SmartOF_produits');
+  if (!produits.length) return zone;
+
+  var orphelins = produits.filter(function (p) { return !p.formation; });
+  zone.appendChild(titre('La liaison avec le catalogue',
+    'Chaque produit SmartOF est rapproché d\'une formation par le code Gesform, lu dans '
+    + 'custom_field_20. Ce qui n\'a pas été rapproché reste ici, visible, plutôt que d\'être '
+    + 'perdu en silence.'));
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  [['Produits rencontrés', produits.length, 'dans SmartOF'],
+   ['Rapprochés', produits.length - orphelins.length, 'liés à une formation du catalogue'],
+   ['À rapprocher', orphelins.length, orphelins.length ? 'à trancher une fois, à la main'
+                                                       : 'rien en attente']
+  ].forEach(function (c, i) {
+    var d = document.createElement('div');
+    d.className = 'tuile';
+    d.innerHTML = '<div class="tuile-lib">' + OF.echappe(c[0]) + '</div>'
+      + '<div class="tuile-val' + (i === 2 && c[1] ? ' negatif' : '') + '">' + OF.ent(c[1]) + '</div>'
+      + '<div class="tuile-ctx">' + OF.echappe(c[2]) + '</div>';
+    t.appendChild(d);
+  });
+  zone.appendChild(t);
+
+  if (!orphelins.length) return zone;
+
+  var tab = document.createElement('table');
+  tab.className = 'matrice';
+  tab.innerHTML = '<thead><tr><th class="gauche">Produit SmartOF</th>'
+    + '<th class="gauche">Code Gesform</th><th class="gauche">Formation du catalogue</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  orphelins.forEach(function (p) {
+    var tr = document.createElement('tr');
+    var n = document.createElement('td');
+    n.className = 'gauche libelle';
+    n.textContent = OF.texte(p.nom) || '(sans intitulé)';
+    tr.appendChild(n);
+    var c = document.createElement('td');
+    c.className = 'gauche';
+    c.innerHTML = OF.texte(p.code_gesform)
+      ? '<code>' + OF.echappe(OF.texte(p.code_gesform)) + '</code>'
+      : '<span class="second">custom_field_20 vide</span>';
+    tr.appendChild(c);
+    var f = document.createElement('td');
+    f.className = 'gauche';
+    f.appendChild(choixFormation(p));
+    tr.appendChild(f);
+    corps.appendChild(tr);
+  });
+  tab.appendChild(corps);
+  zone.appendChild(defilantLocal(tab));
+
+  var note = document.createElement('p');
+  note.className = 'aide';
+  note.textContent = 'Un rapprochement fait ici n\'est jamais écrasé par un rafraîchissement '
+    + 'ultérieur : le code Gesform sert à proposer, votre choix tranche.';
+  zone.appendChild(note);
+  return zone;
+}
+
+function choixFormation(p) {
+  var s = document.createElement('select');
+  s.className = 'champ saisie';
+  s.style.width = '100%';
+  s.style.textAlign = 'left';
+  var options = ['<option value="0">— à rapprocher —</option>'];
+  OF.formationsTriees().forEach(function (f) {
+    options.push('<option value="' + f.id + '">'
+      + OF.echappe((OF.texte(f.code) ? OF.texte(f.code) + ' · ' : '') + OF.texte(f.intitule))
+      + '</option>');
+  });
+  s.innerHTML = options.join('');
+  s.value = String(p.formation || 0);
+  s.addEventListener('change', function () {
+    OF.appliquer([['UpdateRecord', 'SmartOF_produits', p.id, { formation: +s.value || 0 }]],
+      ['SmartOF_produits'], function () { rendre(); });
+  });
+  return s;
+}
+
+/* ====================================================== correspondance === */
+/* LA LIAISON AVEC LE CATALOGUE
+   Une session SmartOF porte un produit de formation ; ce produit porte le
+   code Gesform dans custom_field_20. C'est lui qui raccroche au catalogue
+   Grist. Le code peut vivre sur l'instance du produit ou sur sa fiche : on
+   regarde les deux, dans cet ordre, plutôt que de parier sur l'un.
+
+   POURQUOI UNE TABLE DE CORRESPONDANCE PLUTÔT QU'UN RAPPROCHEMENT DIRECT
+   Un rapprochement calculé à la volée perd en silence tout ce qu'il ne sait
+   pas rapprocher. La table garde une ligne par produit rencontré : ce qui
+   n'est pas rapproché reste visible, se tranche une fois à la main, et le
+   choix tient ensuite. */
+function normaliser(code) {
+  return String(code === null || code === undefined ? '' : code).trim().toUpperCase();
+}
+function codeGesform(instance, fiche) {
+  var a = (instance && instance.custom_fields) || {};
+  var b = (fiche && fiche.custom_fields) || {};
+  return normaliser(a.custom_field_20 || b.custom_field_20 || '');
+}
+
+/* L'index du catalogue : le code Gesform peut être rangé dans `code`, ou
+   dans une colonne dédiée si le document en a une. */
+function indexCatalogue() {
+  var idx = {};
+  OF.table('Formations').forEach(function (f) {
+    ['code_gesform', 'code'].forEach(function (col) {
+      var c = normaliser(f[col]);
+      if (c && !idx[c]) idx[c] = f.id;
+    });
+  });
+  return idx;
+}
+
+/* ------------------------------------------------- correspondance Grist -- */
+var SCHEMAS = {
+  /* `Parametres` porte des nombres : une adresse et une clé n'en sont pas.
+     Sans colonne texte, la configuration irait se perdre dans une colonne
+     numérique — on le vérifie avant de proposer quoi que ce soit. */
+  Parametres: [
+    ['texte', 'Text', 'Valeur texte'],
+  ],
+  SmartOF_produits: [
+    ['produit_uid', 'Text', 'Identifiant SmartOF du produit'],
+    ['code_gesform', 'Text', 'Code Gesform'],
+    ['nom', 'Text', 'Intitulé dans SmartOF'],
+    ['formation', 'Ref:Formations', 'Formation du catalogue'],
+  ],
+  SmartOF_sessions: [
+    ['uid', 'Text', 'Identifiant SmartOF'],
+    ['custom_id', 'Text', 'Numéro de session'],
+    ['nom', 'Text', 'Intitulé de la session'],
+    ['date_debut', 'Date', 'Début'],
+    ['date_fin', 'Date', 'Fin'],
+    ['statut', 'Text', 'Statut'],
+    ['lieu', 'Text', 'Lieu'],
+    ['produit_uid', 'Text', 'Identifiant du produit'],
+    ['produit_nom', 'Text', 'Produit de formation'],
+    ['code_gesform', 'Text', 'Code Gesform'],
+    ['archive', 'Bool', 'Archivée'],
+    ['maj_le', 'Text', 'Modifiée le'],
+  ],
+  SmartOF_commanditaires: [
+    ['uid', 'Text', 'Identifiant SmartOF'],
+    ['session_uid', 'Text', 'Session'],
+    ['entreprise_uid', 'Text', 'Entreprise'],
+    ['type', 'Text', 'Type'],
+    ['nb_apprenants', 'Int', 'Apprenants inscrits'],
+    ['budget', 'Numeric', 'Budget'],
+    ['custom_id', 'Text', 'Référence'],
+  ],
+};
+
+function colonnesManquantes() {
+  var manque = [];
+  Object.keys(SCHEMAS).forEach(function (t) {
+    var meta = OF.doc.colonnes[t];
+    if (!meta || !Object.keys(meta).length) { manque.push([t, null]); return; }
+    SCHEMAS[t].forEach(function (c) { if (!meta[c[0]]) manque.push([t, c]); });
+  });
+  return manque;
+}
+
+function creerCeQuiManque(bouton) {
+  var manque = colonnesManquantes();
+  var tablesAbsentes = manque.filter(function (m) { return !m[1]; });
+  if (tablesAbsentes.length) {
+    OF.signaler('Tables absentes : ' + tablesAbsentes.map(function (m) { return m[0]; }).join(', ')
+      + ' — à créer dans le document', true);
+    return;
+  }
+  var actions = manque.map(function (m) {
+    return ['AddVisibleColumn', m[0], m[1][0], { type: m[1][1], label: m[1][2], isFormula: false }];
+  });
+  if (!actions.length) { OF.signaler('Rien à créer : toutes les colonnes existent'); return; }
+  bouton.disabled = true;
+  OF.appliquer(actions, [], function () {
+    OF.chargerColonnes().then(function () {
+      rendre();
+      OF.signaler(OF.plur(actions.length, 'colonne') + ' ' + OF.accord(actions.length, 'créée', 'créées'));
+    });
+  }).catch(function (e) { OF.signaler(e.message, true); bouton.disabled = false; });
+}
+
+/* ------------------------------------------------------- transformation -- */
+function jour(iso) {
+  if (!iso) return null;
+  var d = new Date(iso);
+  return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
+}
+function lieuDe(meta) {
+  var l = (meta && meta.lieu) || {};
+  return OF.texte(l.lieuLibre) || OF.texte(l.nom) || OF.texte(l.typeLieu) || '';
+}
+
+function sessionVersGrist(s, fiches) {
+  var pi = s.produitInstance || {};
+  var meta = s.meta || {};
+  return {
+    uid: s.sessionUid || '',
+    custom_id: String(s.customId === null || s.customId === undefined ? '' : s.customId),
+    nom: OF.texte(meta.nom),
+    date_debut: jour(meta.dateDebut),
+    date_fin: jour(meta.dateFin),
+    statut: OF.texte(meta.status),
+    lieu: lieuDe(meta),
+    produit_uid: pi.produitFormationUid || '',
+    produit_nom: OF.texte(pi.meta && pi.meta.nom),
+    code_gesform: codeGesform(pi, fiches[pi.produitFormationUid]),
+    archive: !!s.archive,
+    maj_le: OF.texte(s.updatedAt),
+  };
+}
+
+function commanditaireVersGrist(c) {
+  return {
+    uid: c.commanditaireUid || '',
+    session_uid: c.sessionUid || '',
+    entreprise_uid: c.entrepriseUid || '',
+    type: OF.texte(c.type),
+    nb_apprenants: (c.apprenantUids || []).length,
+    budget: typeof c.budget === 'number' ? c.budget : 0,
+    custom_id: String(c.customId === null || c.customId === undefined ? '' : c.customId),
+  };
+}
+
+/* ---------------------------------------------------------- écriture --- */
+/* Comparaison champ à champ avant d'écrire : réécrire une ligne identique
+   ferait un historique de modifications illisible dans Grist, et donnerait
+   un rapport où tout paraît avoir changé à chaque passage. */
+function different(ligne, voulu) {
+  return Object.keys(voulu).some(function (k) {
+    var a = ligne[k], b = voulu[k];
+    if (a === null || a === undefined) a = '';
+    if (b === null || b === undefined) b = '';
+    if (typeof b === 'boolean') return !!a !== b;
+    if (typeof b === 'number') return Math.abs((a || 0) - b) > 0.0001;
+    return String(a) !== String(b);
+  });
+}
+
+function fusionner(table, voulus, cle, bilan) {
+  var parCle = {};
+  OF.table(table).forEach(function (l) {
+    var k = OF.texte(l[cle]);
+    if (k && !parCle[k]) parCle[k] = l;
+  });
+  var actions = [];
+  voulus.forEach(function (v) {
+    var k = OF.texte(v[cle]);
+    if (!k) { bilan.avertissements.push(table + ' : un enregistrement sans identifiant a été ignoré'); return; }
+    var l = parCle[k];
+    if (!l) { actions.push(['AddRecord', table, null, v]); bilan.ajoutees++; return; }
+    if (different(l, v)) { actions.push(['UpdateRecord', table, l.id, v]); bilan.corrigees++; }
+    else bilan.inchangees++;
+  });
+  return actions;
+}
+
+/* -------------------------------------------------------- le parcours --- */
+function rafraichir() {
+  if (enCours) { OF.signaler('Un rafraîchissement est déjà en cours'); return; }
+  if (!configure()) { OF.signaler('Renseignez d\'abord l\'adresse et la clé', true); return; }
+  var manque = colonnesManquantes();
+  if (manque.length) {
+    OF.signaler('Colonnes manquantes : créez-les avant de rafraîchir', true);
+    rendre();
+    return;
+  }
+
+  enCours = true;
+  OF.$('rafraichir').disabled = true;
+  var etat = OF.$('avancement');
+  var dire = function (t) { if (etat) etat.textContent = t; };
+  var bilan = { lues: 0, pages: 0, ajoutees: 0, corrigees: 0, inchangees: 0, avertissements: [] };
+
+  var sessions = [], commanditaires = [], fiches = {};
+
+  dire('Lecture des produits de formation…');
+  parcourir('/v2/produits-de-formation', { limit: 200 }, function (n) {
+    dire('Produits de formation : ' + n + ' lus…');
+  }).then(function (liste) {
+    liste.forEach(function (p) {
+      if (p.produitFormationUid) fiches[p.produitFormationUid] = p;
+    });
+    dire('Lecture des sessions…');
+    return parcourir('/v2/session_formations', parametresDeFenetre(), function (n, p) {
+      bilan.pages = p; dire('Sessions : ' + n + ' lues sur ' + p + ' page(s)…');
+    });
+  }).then(function (liste) {
+    sessions = liste;
+    bilan.lues += liste.length;
+    dire('Lecture des commanditaires…');
+    return parcourir('/v2/commanditaires', parametresDeFenetre(), function (n) {
+      dire('Commanditaires : ' + n + ' lus…');
+    });
+  }).then(function (liste) {
+    commanditaires = liste;
+    bilan.lues += liste.length;
+    dire('Écriture dans le document…');
+
+    /* les produits rencontrés, et leur rapprochement au catalogue */
+    var idx = indexCatalogue();
+    var produits = {}, sansCode = 0, sansFormation = [];
+    sessions.forEach(function (s) {
+      var pi = s.produitInstance || {};
+      var uid = pi.produitFormationUid;
+      if (!uid || produits[uid]) return;
+      var code = codeGesform(pi, fiches[uid]);
+      produits[uid] = {
+        produit_uid: uid,
+        code_gesform: code,
+        nom: OF.texte(pi.meta && pi.meta.nom),
+        formation: idx[code] || 0,
+      };
+      if (!code) sansCode++;
+      else if (!idx[code]) sansFormation.push(code + ' — ' + produits[uid].nom);
+    });
+
+    var actions = []
+      .concat(fusionner('SmartOF_produits', Object.keys(produits).map(function (k) {
+        var p = produits[k];
+        /* on ne réécrit jamais un rapprochement fait à la main : si la ligne
+           existe déjà avec une formation, on laisse le choix de l'utilisateur */
+        var deja = OF.table('SmartOF_produits').filter(function (l) {
+          return OF.texte(l.produit_uid) === p.produit_uid;
+        })[0];
+        if (deja && deja.formation) { var c = {}; Object.keys(p).forEach(function (k2) { c[k2] = p[k2]; }); c.formation = deja.formation; return c; }
+        return p;
+      }), 'produit_uid', bilan))
+      .concat(fusionner('SmartOF_sessions',
+        sessions.map(function (s) { return sessionVersGrist(s, fiches); }), 'uid', bilan))
+      .concat(fusionner('SmartOF_commanditaires',
+        commanditaires.map(commanditaireVersGrist), 'uid', bilan));
+
+    if (sansCode) {
+      bilan.avertissements.push(OF.plur(sansCode, 'produit') + ' sans code Gesform dans '
+        + 'custom_field_20 : ' + OF.accord(sansCode, 'il n\'a', 'ils n\'ont')
+        + ' pas pu être rapproché' + (sansCode > 1 ? 's' : '') + ' du catalogue.');
+    }
+    if (sansFormation.length) {
+      bilan.avertissements.push(OF.plur(sansFormation.length, 'code') + ' sans formation '
+        + 'correspondante dans le catalogue : ' + sansFormation.slice(0, 6).join(' · ')
+        + (sansFormation.length > 6 ? ' …' : '')
+        + '. À rapprocher à la main dans SmartOF_produits.');
+    }
+    if (!actions.length) {
+      bilan.quand = quandMaintenant();
+      terminer(bilan, dire);
+      return null;
+    }
+    return OF.appliquer(actions, RELIRE, function () {}).then(function () {
+      bilan.quand = quandMaintenant();
+      return ecrireReglage(CLE_DERNIER, bilan.quand);
+    }).then(function () { terminer(bilan, dire); });
+  }).catch(function (e) {
+    dire('');
+    bilan.quand = quandMaintenant();
+    bilan.avertissements.push('Interrompu : ' + e.message);
+    bilan.ajoutees = bilan.corrigees = 0;
+    terminer(bilan, dire);
+    OF.signaler(e.message, true);
+  });
+}
+
+function quandMaintenant() {
+  var d = new Date();
+  return d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR').slice(0, 5);
+}
+
+function terminer(bilan, dire) {
+  enCours = false;
+  OF.$('rafraichir').disabled = false;
+  dernierRapport = bilan;
+  dire('');
+  rendre();
+}
+
+/* ------------------------------------------------------------ rapport -- */
+function sectionRapport(r) {
+  var zone = document.createElement('div');
+  zone.appendChild(titre('Le dernier rafraîchissement', r.quand));
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  [['Lues chez SmartOF', r.lues, OF.plur(r.pages, 'page')],
+   ['Ajoutées', r.ajoutees, 'nouvelles dans le document'],
+   ['Corrigées', r.corrigees, 'déjà là, mais modifiées'],
+   ['Inchangées', r.inchangees, 'rien à écrire']
+  ].forEach(function (c) {
+    var d = document.createElement('div');
+    d.className = 'tuile';
+    d.innerHTML = '<div class="tuile-lib">' + OF.echappe(c[0]) + '</div>'
+      + '<div class="tuile-val">' + OF.ent(c[1]) + '</div>'
+      + '<div class="tuile-ctx">' + OF.echappe(c[2]) + '</div>';
+    t.appendChild(d);
+  });
+  zone.appendChild(t);
+
+  if (r.avertissements && r.avertissements.length) {
+    var ul = document.createElement('ul');
+    ul.className = 'a-faire';
+    ul.innerHTML = r.avertissements.map(function (a) {
+      return '<li>' + OF.echappe(a) + '</li>';
+    }).join('');
+    zone.appendChild(ul);
+  }
+  return zone;
+}
+
+/* ------------------------------------------------------------ montage -- */
+function demarrer() {
+  rendre();
+}
+
+OF.$('rafraichir').addEventListener('click', rafraichir);
+
+if (typeof window.TEST_SANS_DEMARRAGE === 'undefined') OF.initialiser(TABLES, demarrer);
+window.__smartof = {
+  demarrer: function () { OF.initialiser(TABLES, demarrer); },
+  parcourir: parcourir, appeler: appeler, curseurDe: curseurDe,
+  parametresDeFenetre: parametresDeFenetre, rendre: rendre,
+};
+</script>
+</body>
+</html>
