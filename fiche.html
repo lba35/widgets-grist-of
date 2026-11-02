@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=23">
+<link rel="stylesheet" href="commun.css?v=24">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -21,13 +21,16 @@
     </div>
   </div>
   <div class="corps">
-    <div class="rail" id="rail" role="list"></div>
+    <div class="colonne-rail">
+      <div class="filtre-rail" id="filtre-rail" hidden></div>
+      <div class="rail" id="rail" role="list"></div>
+    </div>
     <div class="fiche" id="fiche"><p class="vide">Chargement du document…</p></div>
   </div>
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=23"></script>
+<script src="commun.js?v=24"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,14 +45,14 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v23';
+var VERSION = 'v24';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
   'Gestionnaire', 'Metiers', 'Enjeux', 'Obligations', 'Intervenants', 'Intervenants_formation',
   'Besoins_salles', 'Types_salles', 'Tarifs', 'Parametres'];
 
-var courant = null, filtre = '', curseurGrist = null;
+var courant = null, filtre = '', panier = 'toutes', curseurGrist = null;
 
 /* ------------------------------------------------------- accès données -- */
 function projDe(idAnnee, idFormation) {
@@ -352,13 +355,97 @@ function reprendre(f, idSource, coefficient) {
 var ETIQUETTES = { fait: 'validée', partiel: '1 sur 2', vide: 'à valider' };
 var PASTILLES = { fait: 'p-fait', partiel: 'p-partiel', vide: 'p-vide' };
 
+/* Les paniers du filtre. « Vendables » et « plan de formation » se recouvrent
+   volontairement : une formation qui vise les deux publics est dans les deux,
+   et c'est bien ce qu'elle est. Le décompte le dit plutôt que de laisser
+   croire à une partition. */
+var PANIERS_RAIL = [
+  { cle: 'toutes', libelle: 'Toutes les formations', garde: function () { return true; } },
+  { cle: 'vendables', libelle: 'Vendables à l\'extérieur',
+    garde: function (p) { return p === 'Externe' || p === 'Mixte'; } },
+  { cle: 'plan', libelle: 'Plan de formation du CHU',
+    garde: function (p) { return p === 'Interne' || p === 'Mixte'; } },
+  { cle: 'mixtes', libelle: 'Les deux publics',
+    garde: function (p) { return p === 'Mixte'; } },
+  { cle: 'aqualifier', libelle: 'Périmètre à qualifier',
+    garde: function (p) { return p !== 'Externe' && p !== 'Mixte' && p !== 'Interne'; } },
+];
+function panierRail(cle) {
+  return PANIERS_RAIL.filter(function (p) { return p.cle === cle; })[0] || PANIERS_RAIL[0];
+}
+function perimetreConnu() {
+  var meta = OF.doc.colonnes.Formations;
+  if (meta && Object.keys(meta).length) return !!meta.perimetre;
+  return OF.table('Formations').some(function (f) { return 'perimetre' in f; });
+}
+function perimetreDe(f) { return OF.texte(f.perimetre); }
+
 function listeFiltree() {
   var q = filtre.trim().toLowerCase();
-  var l = OF.formationsTriees();
-  if (!q) return l;
-  return l.filter(function (f) {
+  var garde = panierRail(panier).garde;
+  return OF.formationsTriees().filter(function (f) {
+    if (panier !== 'toutes' && perimetreConnu() && !garde(perimetreDe(f))) return false;
+    if (!q) return true;
     return (OF.texte(f.intitule) + ' ' + OF.texte(f.code)).toLowerCase().indexOf(q) >= 0;
   });
+}
+
+/* Le filtre n'apparaît que si le document sait distinguer les deux publics :
+   sans la colonne, il n'offrirait que des paniers vides. */
+function rendreFiltreRail() {
+  var zone = OF.$('filtre-rail');
+  if (!perimetreConnu()) { zone.hidden = true; return; }
+  zone.hidden = false;
+
+  var toutes = OF.formationsTriees();
+  var compte = function (p) {
+    return toutes.filter(function (f) { return p.garde(perimetreDe(f)); }).length;
+  };
+
+  if (!zone.dataset.monte) {
+    zone.dataset.monte = '1';
+    var s = document.createElement('select');
+    s.id = 'panier';
+    s.setAttribute('aria-label', 'Filtrer les formations par périmètre');
+    s.addEventListener('change', function (ev) {
+      panier = ev.target.value;
+      rendreRail();
+    });
+    zone.appendChild(s);
+    var d = document.createElement('p');
+    d.className = 'decompte';
+    d.id = 'decompte';
+    zone.appendChild(d);
+  }
+
+  var sel = OF.$('panier');
+  var options = PANIERS_RAIL.map(function (p) {
+    return '<option value="' + p.cle + '"' + (p.cle === panier ? ' selected' : '') + '>'
+      + OF.echappe(p.libelle) + ' (' + compte(p) + ')</option>';
+  }).join('');
+  if (sel.dataset.options !== options) { sel.innerHTML = options; sel.dataset.options = options; }
+  sel.value = panier;
+
+  var mixtes = compte(panierRail('mixtes'));
+  var d2 = OF.$('decompte');
+  if (panier === 'vendables' && mixtes) {
+    d2.textContent = 'Dont ' + OF.plur(mixtes, 'formation') + ' aussi au plan de formation.';
+  } else if (panier === 'plan' && mixtes) {
+    d2.textContent = 'Dont ' + OF.plur(mixtes, 'formation') + ' aussi vendue'
+      + (mixtes > 1 ? 's' : '') + ' à l\'extérieur.';
+  } else if (panier === 'aqualifier') {
+    d2.textContent = 'Aucun segment de marché visé : à compléter, pas à ranger.';
+  } else {
+    d2.textContent = 'Le périmètre se déduit des segments visés par chaque formation.';
+  }
+
+  /* La fiche ouverte peut sortir du panier choisi : elle reste à l'écran mais
+     disparaît de la liste. Sans un mot, on la croit perdue. */
+  if (courant && !listeFiltree().some(function (f) { return f.id === courant; })) {
+    var f = OF.parId(OF.table('Formations'))[courant];
+    d2.textContent = 'La fiche ouverte — ' + OF.texte(f && f.intitule)
+      + ' — n\'est pas dans ce panier ; elle reste affichée à droite.';
+  }
 }
 
 /* Le rail se met à jour sur place. Le reconstruire après chaque
@@ -376,6 +463,8 @@ function majItem(b, f) {
       : 'Projections validées, définition à valider')
     : (a.etat === 'fait' ? 'Définition et projections validées'
       : 'Ni la définition ni les projections ne sont validées');
+  var p = perimetreConnu() ? perimetreDe(f) : '';
+  if (p) b.title += ' — périmètre : ' + p.toLowerCase();
   b.querySelector('.item-nom').textContent = OF.texte(f.intitule);
   b.querySelector('.item-etat').innerHTML =
     '<span class="pastille ' + PASTILLES[a.etat] + '"></span>' + OF.echappe(detail);
@@ -384,10 +473,14 @@ function majItem(b, f) {
 }
 
 function rendreRail() {
+  rendreFiltreRail();
   var liste = listeFiltree(), rail = OF.$('rail');
   if (!liste.length) {
     rail.dataset.ids = '';
-    rail.innerHTML = '<p class="rail-vide">Aucune formation ne correspond à cette recherche.</p>';
+    rail.innerHTML = '<p class="rail-vide">' + (panier === 'toutes'
+      ? 'Aucune formation ne correspond à cette recherche.'
+      : 'Aucune formation de ce périmètre' + (filtre.trim() ? ' ne correspond à cette recherche.'
+          : '. Le périmètre se règle par les segments visés, sur la fiche.')) + '</p>';
     rendreAvance();
     return;
   }

@@ -217,6 +217,27 @@ vendues, leur résultat n'aurait pas de sens, et les compter parmi les déficita
 passer une mission de service pour un échec. Une tuile dit combien ont été mises de côté et ce
 qu'elles coûtent ; leurs coûts restent comptés dans la section « Pour qui ».
 
+### Retrouver les formations par périmètre
+
+La fiche porte, au-dessus de son rail, un filtre à cinq paniers avec le nombre de formations
+dans chacun :
+
+| Panier | Ce qu'il retient |
+|---|---|
+| Toutes les formations | tout le catalogue |
+| Vendables à l'extérieur | périmètre `Externe` ou `Mixte` |
+| Plan de formation du CHU | périmètre `Interne` ou `Mixte` |
+| Les deux publics | périmètre `Mixte` |
+| Périmètre à qualifier | aucun segment visé |
+
+Les deux paniers du milieu **se recouvrent volontairement** : une formation qui vise les deux
+publics appartient aux deux, et c'est ce qu'elle est. Une ligne sous le filtre dit combien de
+formations sont dans ce cas, plutôt que de laisser croire à une partition.
+
+Le filtre se combine à la recherche par intitulé ou par code, et les raccourcis `Alt` + `←` `→`
+circulent dans la liste filtrée. Sur un document où la colonne `perimetre` n'existe pas encore,
+le filtre ne s'affiche pas du tout : il n'offrirait que des paniers vides.
+
 ### Passer à ce modèle
 
 Le script `perimetre_interne_grist.js`, collé dans la console du navigateur sur la page du
@@ -379,7 +400,7 @@ porte des sessions.
 | `↑` `↓` | Année précédente ou suivante, dans la même colonne |
 | `Entrée` | Descend d'une ligne |
 | `Échap` | Annule la frappe en cours |
-| `Alt` + `←` `→` | Formation précédente ou suivante |
+| `Alt` + `←` `→` | Formation précédente ou suivante, **dans la liste filtrée** |
 | `/` | Place le curseur dans la recherche |
 
 ## Tables lues et écrites

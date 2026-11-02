@@ -90,6 +90,25 @@ a { color: var(--fait); }
   padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--trait);
 }
 .corps { display: flex; flex: 1 1 auto; min-height: 0; }
+/* La colonne de gauche : un filtre fixe en tête, la liste qui défile dessous.
+   Le filtre ne doit pas partir avec le défilement, sinon on ne sait plus ce
+   qu'on regarde dès qu'on descend dans la liste. */
+.colonne-rail {
+  flex: 0 0 var(--rail); min-width: 0; display: flex; flex-direction: column;
+  min-height: 0; background: var(--surface); border-right: 1px solid var(--trait);
+}
+.colonne-rail .rail { flex: 1 1 auto; border-right: 0; }
+.filtre-rail {
+  flex: 0 0 auto; padding: 9px 12px; border-bottom: 1px solid var(--trait);
+  background: var(--papier);
+}
+.filtre-rail select {
+  width: 100%; padding: 5px 6px; font: inherit; font-size: 12.5px;
+  color: var(--encre); background: var(--surface);
+  border: 1px solid var(--trait-fort); border-radius: 3px;
+}
+.filtre-rail select:focus { outline: none; border-color: var(--fait); box-shadow: var(--ombre-focus); }
+.filtre-rail .decompte { margin-top: 5px; font-size: 11.5px; color: var(--sourd); line-height: 1.35; }
 .rail {
   flex: 0 0 var(--rail); min-width: 0; overflow-y: auto;
   background: var(--surface); border-right: 1px solid var(--trait);
