@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=29">
+<link rel="stylesheet" href="commun.css?v=30">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=29"></script>
-<script src="graphes.js?v=29"></script>
+<script src="commun.js?v=30"></script>
+<script src="graphes.js?v=30"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v29';
+var VERSION = 'v30';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -1032,14 +1032,47 @@ function grapheDomaines(zone, annees) {
    complète fait lire une catastrophe là où il n'y a qu'un import incomplet.
    La période réellement chargée est donc dite en toutes lettres, avant les
    chiffres, et l'écart n'est montré que pour les années qui ont les deux. */
-function realiseDisponible() {
-  return colonneExiste('Annees', 'realise_vendu')
-    && colonneExiste('SmartOF_sessions', 'annee');
+/* Grist dérive l'identifiant d'une table de son libellé : exiger une casse
+   exacte ferait déclarer absente une table qui est là. */
+function tableSessions() {
+  var connues = Object.keys(OF.doc.colonnes || {});
+  if (connues.indexOf('SmartOF_sessions') >= 0) return 'SmartOF_sessions';
+  return connues.filter(function (t) {
+    return t.toLowerCase() === 'smartof_sessions';
+  })[0] || null;
 }
+
+/* Deux conditions, et dire laquelle manque vaut mieux que dire « pas prêt ».
+   Un script lancé en essai à blanc n'écrit rien : c'est son réglage par
+   défaut, et c'est la cause la plus fréquente d'un écran qui ne change pas. */
+function diagnosticRealise() {
+  var t = tableSessions();
+  if (!t) {
+    var voisines = Object.keys(OF.doc.colonnes || {})
+      .filter(function (x) { return /smartof/i.test(x); }).sort();
+    return { pret: false, cause: 'table',
+      detail: 'La table <b>SmartOF_sessions</b> est introuvable.'
+        + (voisines.length ? ' Le document contient : <b>' + OF.echappe(voisines.join(', '))
+            + '</b> — la casse compte.'
+          : ' Aucune table du document n\'évoque SmartOF : le widget SmartOF n\'a pas '
+            + 'encore rapatrié quoi que ce soit.') };
+  }
+  var manque = [];
+  if (!colonneExiste(t, 'annee')) manque.push(t + '.annee');
+  if (!colonneExiste('Annees', 'realise_vendu')) manque.push('Annees.realise_vendu');
+  if (!manque.length) return { pret: true };
+  return { pret: false, cause: 'colonnes',
+    detail: 'La table ' + OF.echappe(t) + ' est bien là, mais '
+      + OF.accord(manque.length, 'la colonne', 'les colonnes') + ' <b>'
+      + OF.echappe(manque.join(', ')) + '</b> ' + OF.accord(manque.length, 'manque', 'manquent')
+      + '.' };
+}
+
+function realiseDisponible() { return diagnosticRealise().pret; }
 
 function couverture() {
   var dates = [];
-  OF.table('SmartOF_sessions').forEach(function (s) {
+  OF.table(tableSessions() || 'SmartOF_sessions').forEach(function (s) {
     var d = s.date_debut;
     if (typeof d === 'number' && d > 1000000000) dates.push(d * 1000);
     else if (OF.texte(d)) { var t = Date.parse(OF.texte(d)); if (!isNaN(t)) dates.push(t); }
@@ -1047,7 +1080,7 @@ function couverture() {
   if (!dates.length) return null;
   var fmt = function (ms) { return new Date(ms).toLocaleDateString('fr-FR'); };
   return { debut: fmt(Math.min.apply(null, dates)), fin: fmt(Math.max.apply(null, dates)),
-    sessions: OF.table('SmartOF_sessions').length };
+    sessions: OF.table(tableSessions() || 'SmartOF_sessions').length };
 }
 
 function realiseSection(zone, annees) {
@@ -1066,8 +1099,8 @@ function realiseSection(zone, annees) {
     zone.appendChild(p);
   }
 
-  var sansAnnee = OF.table('SmartOF_sessions').filter(function (s) { return !s.annee; }).length;
-  var sansFormation = OF.table('SmartOF_sessions').filter(function (s) { return !s.formation; }).length;
+  var sansAnnee = OF.table(tableSessions() || 'SmartOF_sessions').filter(function (s) { return !s.annee; }).length;
+  var sansFormation = OF.table(tableSessions() || 'SmartOF_sessions').filter(function (s) { return !s.formation; }).length;
 
   var t = document.createElement('div');
   t.className = 'tuiles';
@@ -1122,14 +1155,30 @@ function realiseSection(zone, annees) {
 }
 
 function realiseAbsent(zone) {
+  var d = diagnosticRealise();
   var p = document.createElement('p');
   p.className = 'alerte-bloc';
-  p.innerHTML = 'Le réalisé n\'est pas encore raccroché aux années et aux formations. Le widget '
-    + '<b>SmartOF</b> rapatrie les sessions, les commanditaires et les factures ; le script '
-    + '<code>realise_smartof_grist.js</code> leur pose ensuite l\'année et la formation, et '
-    + 'calcule les totaux que cette section lit. À lancer une fois, après un premier '
-    + 'rafraîchissement réussi.';
+  p.innerHTML = d.detail;
   zone.appendChild(p);
+
+  var q = document.createElement('p');
+  q.className = 'note';
+  q.innerHTML = d.cause === 'colonnes'
+    ? 'Ces colonnes sont posées par le script <code>realise_smartof_grist.js</code>. '
+      + 'S\'il a déjà tourné sans rien changer, c\'est presque toujours qu\'il était en '
+      + '<b>essai à blanc</b> — son réglage par défaut. Sa dernière ligne dit alors '
+      + '« ESSAI À BLANC — rien n\'a été écrit ». Repasser <code>ESSAI_A_BLANC</code> à '
+      + '<code>false</code> en tête du script, puis le recoller.'
+    : 'Le widget <b>SmartOF</b> rapatrie d\'abord les sessions, les commanditaires et les '
+      + 'factures ; le script <code>realise_smartof_grist.js</code> leur pose ensuite '
+      + 'l\'année et la formation.';
+  zone.appendChild(q);
+
+  var r = document.createElement('p');
+  r.className = 'note';
+  r.innerHTML = 'Après avoir appliqué le script, <b>rechargez cette page</b> : les types de '
+    + 'colonnes sont lus une fois au démarrage du widget.';
+  zone.appendChild(r);
 }
 
 /* La pile n'est pas un artifice : facturé + reste à facturer = vendu, donc
@@ -1753,6 +1802,14 @@ function rendreAvance() {
 
 OF.$('annee').addEventListener('change', function (ev) { idAnnee = +ev.target.value; rendre(); });
 
+/* La table peut exister sous une autre casse : TABLES ne l'aurait pas
+   chargée, et elle paraîtrait vide alors qu'elle est pleine. */
+function chargerSessionsSmartOF() {
+  var t = tableSessions();
+  if (!t || TABLES.indexOf(t) >= 0 || OF.table(t).length) return Promise.resolve();
+  return OF.charger([t]).catch(function () { return null; });
+}
+
 function demarrer() {
   var annees = OF.anneesTriees();
   if (!annees.length) { OF.echouer('Aucune année dans la table Annees.'); return; }
@@ -1762,7 +1819,7 @@ function demarrer() {
     return '<option value="' + a.id + '"' + (a.id === idAnnee ? ' selected' : '') + '>'
       + a.annee + '</option>';
   }).join('');
-  rendre();
+  chargerSessionsSmartOF().then(rendre, rendre);
 }
 
 if (typeof window.TEST_SANS_DEMARRAGE === 'undefined') OF.initialiser(TABLES, demarrer);
