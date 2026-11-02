@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=30">
+<link rel="stylesheet" href="commun.css?v=31">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=30"></script>
-<script src="graphes.js?v=30"></script>
+<script src="commun.js?v=31"></script>
+<script src="graphes.js?v=31"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v30';
+var VERSION = 'v31';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -1032,6 +1032,59 @@ function grapheDomaines(zone, annees) {
    complète fait lire une catastrophe là où il n'y a qu'un import incomplet.
    La période réellement chargée est donc dite en toutes lettres, avant les
    chiffres, et l'écart n'est montré que pour les années qui ont les deux. */
+/* EN GRIST, LE LIBELLÉ ET L'IDENTIFIANT SONT DEUX CHOSES
+   Une colonne affichée « Année » peut porter l'identifiant `annee`, `Ann_e`,
+   `A` ou tout autre chose selon la façon dont elle a été créée ou renommée.
+   Chercher l'identifiant exact fait donc déclarer absente une colonne qui est
+   sous les yeux. On la retrouve par son identifiant, à défaut par son
+   libellé, accents et casse mis de côté. */
+function sansAccent(t) {
+  return String(t === null || t === undefined ? '' : t)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+/* Les libellés que le script pose sur ses colonnes : un identifiant renommé
+   se retrouve par là, quand le libellé ne ressemble pas à l'identifiant. */
+var LIBELLES_CONNUS = {
+  realise_sessions: 'Sessions réalisées',
+  realise_places: 'Places vendues (réalisé)',
+  realise_vendu: 'Vendu (réalisé)',
+  realise_facture: 'Facturé HT (réalisé)',
+  reste_a_facturer: 'Reste à facturer',
+  ecart_vendu: 'Écart vendu − projeté',
+  taux_realisation: 'Taux de réalisation',
+  annee: 'Année',
+  formation: 'Formation',
+  date_debut: 'Début',
+};
+var COLS_RESOLUES = {};
+function colonneReelle(table, attendu) {
+  var cle = table + '.' + attendu;
+  if (Object.prototype.hasOwnProperty.call(COLS_RESOLUES, cle)) return COLS_RESOLUES[cle];
+  var meta = OF.doc.colonnes[table] || {};
+  var trouve = meta[attendu] ? attendu : null;
+  if (!trouve) {
+    var cibles = [sansAccent(attendu)];
+    if (LIBELLES_CONNUS[attendu]) cibles.push(sansAccent(LIBELLES_CONNUS[attendu]));
+    Object.keys(meta).forEach(function (c) {
+      if (trouve) return;
+      if (cibles.indexOf(sansAccent(c)) >= 0
+          || cibles.indexOf(sansAccent(meta[c].libelle)) >= 0) trouve = c;
+    });
+  }
+  /* dernier recours : les données elles-mêmes, si les métadonnées manquent */
+  if (!trouve && !Object.keys(meta).length) {
+    var l = OF.table(table)[0];
+    if (l && attendu in l) trouve = attendu;
+  }
+  COLS_RESOLUES[cle] = trouve;
+  return trouve;
+}
+function champDe(ligne, table, attendu) {
+  var c = colonneReelle(table, attendu);
+  return c ? ligne[c] : undefined;
+}
+
 /* Grist dérive l'identifiant d'une table de son libellé : exiger une casse
    exacte ferait déclarer absente une table qui est là. */
 function tableSessions() {
@@ -1058,8 +1111,8 @@ function diagnosticRealise() {
             + 'encore rapatrié quoi que ce soit.') };
   }
   var manque = [];
-  if (!colonneExiste(t, 'annee')) manque.push(t + '.annee');
-  if (!colonneExiste('Annees', 'realise_vendu')) manque.push('Annees.realise_vendu');
+  if (!colonneReelle(t, 'annee')) manque.push(t + '.annee');
+  if (!colonneReelle('Annees', 'realise_vendu')) manque.push('Annees.realise_vendu');
   if (!manque.length) return { pret: true };
   return { pret: false, cause: 'colonnes',
     detail: 'La table ' + OF.echappe(t) + ' est bien là, mais '
@@ -1071,22 +1124,23 @@ function diagnosticRealise() {
 function realiseDisponible() { return diagnosticRealise().pret; }
 
 function couverture() {
-  var dates = [];
-  OF.table(tableSessions() || 'SmartOF_sessions').forEach(function (s) {
-    var d = s.date_debut;
+  var dates = [], T = tableSessions() || 'SmartOF_sessions';
+  OF.table(T).forEach(function (s) {
+    var d = champDe(s, T, 'date_debut');
     if (typeof d === 'number' && d > 1000000000) dates.push(d * 1000);
     else if (OF.texte(d)) { var t = Date.parse(OF.texte(d)); if (!isNaN(t)) dates.push(t); }
   });
   if (!dates.length) return null;
   var fmt = function (ms) { return new Date(ms).toLocaleDateString('fr-FR'); };
   return { debut: fmt(Math.min.apply(null, dates)), fin: fmt(Math.max.apply(null, dates)),
-    sessions: OF.table(tableSessions() || 'SmartOF_sessions').length };
+    sessions: OF.table(T).length };
 }
 
 function realiseSection(zone, annees) {
   if (!realiseDisponible()) { realiseAbsent(zone); return; }
   var a = OF.parId(OF.table('Annees'))[idAnnee];
   if (!a) return;
+  annees.concat([a]).forEach(normaliserAnnee);
 
   var c = couverture();
   if (c) {
@@ -1099,8 +1153,9 @@ function realiseSection(zone, annees) {
     zone.appendChild(p);
   }
 
-  var sansAnnee = OF.table(tableSessions() || 'SmartOF_sessions').filter(function (s) { return !s.annee; }).length;
-  var sansFormation = OF.table(tableSessions() || 'SmartOF_sessions').filter(function (s) { return !s.formation; }).length;
+  var T = tableSessions() || 'SmartOF_sessions';
+  var sansAnnee = OF.table(T).filter(function (s) { return !champDe(s, T, 'annee'); }).length;
+  var sansFormation = OF.table(T).filter(function (s) { return !champDe(s, T, 'formation'); }).length;
 
   var t = document.createElement('div');
   t.className = 'tuiles';
@@ -1152,6 +1207,22 @@ function realiseSection(zone, annees) {
     + 'parti au client. L\'écart entre les deux est ce qui reste à facturer, et il ne se '
     + 'verrait pas si on les confondait.';
   zone.appendChild(note);
+}
+
+/* Les colonnes du réalisé peuvent elles aussi porter un identifiant inattendu.
+   Plutôt que de truffer l'écran d'appels à champDe, on recopie une fois les
+   valeurs sous les noms que le reste du code attend. */
+var CHAMPS_ANNEE = ['realise_sessions', 'realise_places', 'realise_vendu',
+  'realise_facture', 'reste_a_facturer', 'ecart_vendu', 'taux_realisation'];
+function normaliserAnnee(a) {
+  if (!a || a.__realiseNormalise) return;
+  CHAMPS_ANNEE.forEach(function (c) {
+    if (a[c] === undefined) {
+      var v = champDe(a, 'Annees', c);
+      if (v !== undefined) a[c] = v;
+    }
+  });
+  a.__realiseNormalise = true;
 }
 
 function realiseAbsent(zone) {

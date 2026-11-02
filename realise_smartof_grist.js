@@ -155,6 +155,32 @@
   /* ========================================= 1. l'année et la formation */
   console.log('\n1. SmartOF_sessions — année et formation');
 
+  /* GRIST REFUSE DEUX IDENTIFIANTS QUI NE DIFFÈRENT QUE PAR LA CASSE
+     Une table qui porte déjà `Annee` fait créer `annee2` à la place de
+     `annee` — et toutes les formules qui écrivent `lookupRecords(annee=...)`
+     cherchent alors une colonne qui n'existe pas. Le script repère donc les
+     colonnes déjà là, s'en sert, et n'en crée pas de doublon. */
+  function resoudre(liste, attendu) {
+    const exact = liste.find(c => c.id === attendu);
+    if (exact) return exact.id;
+    const bas = attendu.toLowerCase();
+    const proche = liste.find(c => c.id.toLowerCase() === bas);
+    return proche ? proche.id : null;
+  }
+
+  const colsSessions = await colonnes('SmartOF_sessions');
+  const COL_ANNEE = resoudre(colsSessions, 'annee') || 'annee';
+  const COL_FORMATION = resoudre(colsSessions, 'formation') || 'formation';
+  const existaitAnnee = !!resoudre(colsSessions, 'annee');
+  const existaitFormation = !!resoudre(colsSessions, 'formation');
+
+  if (existaitAnnee || existaitFormation) {
+    console.log('    [existante] ' + [existaitAnnee ? COL_ANNEE : null,
+      existaitFormation ? COL_FORMATION : null].filter(Boolean).join(', ')
+      + ' — réutilisée telle quelle, sa formule n\'est pas touchée');
+  }
+  const doublons = colsSessions.filter(c => /^(annee|formation)\d+$/i.test(c.id)).map(c => c.id);
+
   /* La date de début peut être une vraie date ou un texte ISO selon la façon
      dont la colonne a été créée : on accepte les deux plutôt que d'imposer. */
   const ANNEE_DE = [
@@ -175,19 +201,29 @@
     '  an = 0',
   ];
 
-  await poser('SmartOF_sessions', 'annee', F('Année', [
-    ...ANNEE_DE,
-    'if not an:',
-    '  return None',
-    'return Annees.lookupOne(annee=an) or None',
-  ], 'Ref:Annees'));
+  /* Une colonne déjà là porte peut-être votre propre logique : on ne
+     l'écrase pas, on s'en sert. */
+  if (!existaitAnnee) {
+    await poser('SmartOF_sessions', COL_ANNEE, F('Année', [
+      ...ANNEE_DE,
+      'if not an:',
+      '  return None',
+      'return Annees.lookupOne(annee=an) or None',
+    ], 'Ref:Annees'));
+  } else {
+    console.log(`    [conservée] SmartOF_sessions.${COL_ANNEE}`);
+  }
 
-  await poser('SmartOF_sessions', 'formation', F('Formation', [
-    'if not $produit_uid:',
-    '  return None',
-    'p = SmartOF_produits.lookupOne(produit_uid=$produit_uid)',
-    'return (p.formation or None) if p else None',
-  ], 'Ref:Formations'));
+  if (!existaitFormation) {
+    await poser('SmartOF_sessions', COL_FORMATION, F('Formation', [
+      'if not $produit_uid:',
+      '  return None',
+      'p = SmartOF_produits.lookupOne(produit_uid=$produit_uid)',
+      'return (p.formation or None) if p else None',
+    ], 'Ref:Formations'));
+  } else {
+    console.log(`    [conservée] SmartOF_sessions.${COL_FORMATION}`);
+  }
 
   /* --------------------------------- 2. ce que porte chaque session */
   console.log('\n2. SmartOF_sessions — places, vendu, facturé');
@@ -213,10 +249,13 @@
     's = SmartOF_sessions.lookupOne(uid=$session_uid)',
   ];
   for (const t of ['SmartOF_commanditaires', 'SmartOF_factures']) {
-    await poser(t, 'annee', F('Année',
-      [...DE_LA_SESSION, 'return (s.annee or None) if s else None'], 'Ref:Annees'));
-    await poser(t, 'formation', F('Formation',
-      [...DE_LA_SESSION, 'return (s.formation or None) if s else None'], 'Ref:Formations'));
+    const cols = await colonnes(t);
+    const ca = resoudre(cols, 'annee') || 'annee';
+    const cf = resoudre(cols, 'formation') || 'formation';
+    await poser(t, ca, F('Année',
+      [...DE_LA_SESSION, `return (s.${COL_ANNEE} or None) if s else None`], 'Ref:Annees'));
+    await poser(t, cf, F('Formation',
+      [...DE_LA_SESSION, `return (s.${COL_FORMATION} or None) if s else None`], 'Ref:Formations'));
   }
   await poser('SmartOF_factures', 'net_ht', F('Net HT, après avoirs',
     'return ($montant_ht or 0) - ($avoirs or 0)'));
@@ -224,7 +263,7 @@
   /* ====================================== 4. les totaux de chaque année */
   console.log("\n4. Annees — le réalisé, et son écart au projeté");
 
-  const SESSIONS_ANNEE = 'SmartOF_sessions.lookupRecords(annee=$id)';
+  const SESSIONS_ANNEE = `SmartOF_sessions.lookupRecords(${COL_ANNEE}=$id)`;
 
   await poser('Annees', 'realise_sessions', F('Sessions réalisées',
     `len([s for s in ${SESSIONS_ANNEE} if not s.archive])`, 'Int'));
@@ -257,7 +296,7 @@
     'A = next((a for a in Annees.all if a.annee_pilotee), None)',
     'if not A:',
     '  return 0',
-    'S = [s for s in SmartOF_sessions.lookupRecords(formation=$id, annee=A.id) if not s.archive]',
+    `S = [s for s in SmartOF_sessions.lookupRecords(${COL_FORMATION}=$id, ${COL_ANNEE}=A.id) if not s.archive]`,
   ];
 
   await poser('Formations', 'realise_sessions_annee', F('Sessions réalisées (année pilotée)',
@@ -287,8 +326,14 @@
     console.log('  3. Le réalisé ne couvre que ce qui a été rapatrié. Avant de lire');
     console.log('     un écart au projeté, lancez une reprise « Tout, sans filtre de');
     console.log('     date » — sinon vous comparez un partiel à un complet.');
-    console.log('  4. Mettre les widgets à jour (v29 ou plus récent) : le pilotage');
+    console.log('  4. Mettre les widgets à jour (v31 ou plus récent) : le pilotage');
     console.log('     affiche alors le réalisé face au projeté.');
+    if (doublons.length) {
+      console.warn(`  5. ⚠ Colonnes en double à supprimer : ${doublons.join(', ')}.`);
+      console.warn('     Elles viennent d\'un passage précédent du script, quand il ne');
+      console.warn(`     voyait pas vos colonnes ${COL_ANNEE} et ${COL_FORMATION} déjà là.`);
+      console.warn('     Plus rien ne les lit.');
+    }
   }
   console.log('='.repeat(70));
 })();
