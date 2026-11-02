@@ -236,7 +236,9 @@ var G = (function () {
     var totaux = conf.groupes.map(function (g) {
       return g.parts.reduce(function (n, v) { return n + (v || 0); }, 0);
     });
-    var e = echelle(0, Math.max.apply(null, totaux.concat([0])), 4);
+    /* Un repère hors de l'échelle ne se verrait pas : on l'y fait entrer. */
+    var reperes = conf.groupes.map(function (g) { return g.repere || 0; });
+    var e = echelle(0, Math.max.apply(null, totaux.concat(reperes).concat([0])), 4);
     var a = axes({
       larg: conf.larg, haut: conf.haut, echelle: e, n: conf.groupes.length,
       formatY: conf.formatY || compact, unite: conf.unite, description: conf.description
@@ -265,11 +267,35 @@ var G = (function () {
       });
 
       if (conf.total && totaux[i]) {
-        g.appendChild(txt(x + larg / 2, a.y(totaux[i]) - 7,
+        /* Le total s'écrit au-dessus de la pile — mais quand le repère passe
+           juste là, les deux se superposent et deviennent illisibles. On
+           écrit alors au-dessus du repère, qui reste le point le plus haut. */
+        var yHaut = a.y(totaux[i]);
+        if (gr.repere) {
+          var yRep = a.y(gr.repere);
+          if (Math.abs(yHaut - yRep) < 18) yHaut = Math.min(yHaut, yRep);
+        }
+        g.appendChild(txt(x + larg / 2, yHaut - 7,
           (conf.formatVal || compact)(totaux[i]),
           { ancre: 'middle', couleur: 'var(--encre)', gras: 600, taille: 11.5 }));
       }
       a.etiquetteX(i, gr.libelle);
+
+      /* Même idiome que sur les barres simples : le repère est un trait sur
+         la même échelle, pas une série de plus. Il passe souvent sur la pile,
+         d'où le liseré de fond qui le détache. */
+      if (gr.repere) {
+        var yr = a.y(gr.repere);
+        g.appendChild(el('line', {
+          x1: x - 6, x2: x + larg + 6, y1: yr, y2: yr,
+          stroke: 'var(--papier)', 'stroke-width': 5
+        }));
+        g.appendChild(el('line', {
+          x1: x - 5, x2: x + larg + 5, y1: yr, y2: yr,
+          stroke: 'var(--encre)', 'stroke-width': 2, 'stroke-dasharray': '3 3',
+          'stroke-linecap': 'round'
+        }));
+      }
 
       var cible = el('rect', {
         x: a.bx(i), y: a.m.h, width: a.bande, height: a.ph, fill: 'transparent'

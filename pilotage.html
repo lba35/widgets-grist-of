@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=28">
+<link rel="stylesheet" href="commun.css?v=29">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=28"></script>
-<script src="graphes.js?v=28"></script>
+<script src="commun.js?v=29"></script>
+<script src="graphes.js?v=29"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,9 +47,10 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v28';
+var VERSION = 'v29';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
+  'SmartOF_sessions',
   'Parametres', 'Domaines', 'Categories_tarifaires', 'Typologies'];
 
 /* Les objectifs que l'écran sait tenir. Chacun n'apparaît que si la colonne
@@ -176,6 +177,11 @@ function pageProjection() {
     'Quels domaines portent la recette, et quelles formations couvrent leurs coûts.'));
   grapheDomaines(zone, annees);
   rentabilite(zone);
+
+  zone.appendChild(section('Ce qui s\'est vraiment vendu',
+    'Le réalisé venu de SmartOF, face à la projection : ce qui est engagé, ce qui est '
+    + 'facturé, et ce qui reste à facturer.'));
+  realiseSection(zone, annees);
 
   zone.appendChild(section('Pour qui',
     'Ce que portent les formations vendues à l\'extérieur, et ce que portent celles '
@@ -1017,6 +1023,207 @@ function grapheDomaines(zone, annees) {
       });
     }
   });
+}
+
+/* ------------------------------------------------- le réalisé SmartOF --- */
+/* DEUX CHOSES QUI NE SE COMPARENT PAS NAÏVEMENT
+   Le projeté couvre l'année entière ; le réalisé ne couvre que ce que le
+   widget SmartOF a rapatrié. Comparer un réalisé partiel à une projection
+   complète fait lire une catastrophe là où il n'y a qu'un import incomplet.
+   La période réellement chargée est donc dite en toutes lettres, avant les
+   chiffres, et l'écart n'est montré que pour les années qui ont les deux. */
+function realiseDisponible() {
+  return colonneExiste('Annees', 'realise_vendu')
+    && colonneExiste('SmartOF_sessions', 'annee');
+}
+
+function couverture() {
+  var dates = [];
+  OF.table('SmartOF_sessions').forEach(function (s) {
+    var d = s.date_debut;
+    if (typeof d === 'number' && d > 1000000000) dates.push(d * 1000);
+    else if (OF.texte(d)) { var t = Date.parse(OF.texte(d)); if (!isNaN(t)) dates.push(t); }
+  });
+  if (!dates.length) return null;
+  var fmt = function (ms) { return new Date(ms).toLocaleDateString('fr-FR'); };
+  return { debut: fmt(Math.min.apply(null, dates)), fin: fmt(Math.max.apply(null, dates)),
+    sessions: OF.table('SmartOF_sessions').length };
+}
+
+function realiseSection(zone, annees) {
+  if (!realiseDisponible()) { realiseAbsent(zone); return; }
+  var a = OF.parId(OF.table('Annees'))[idAnnee];
+  if (!a) return;
+
+  var c = couverture();
+  if (c) {
+    var p = document.createElement('p');
+    p.className = 'note';
+    p.innerHTML = 'Ce qui est chargé dans le document : <b>' + OF.plur(c.sessions, 'session')
+      + '</b> SmartOF, du <b>' + OF.echappe(c.debut) + '</b> au <b>' + OF.echappe(c.fin)
+      + '</b>. Tout ce qui est hors de cette période n\'apparaît pas ci-dessous — ce serait '
+      + 'alors un import incomplet, pas un retard.';
+    zone.appendChild(p);
+  }
+
+  var sansAnnee = OF.table('SmartOF_sessions').filter(function (s) { return !s.annee; }).length;
+  var sansFormation = OF.table('SmartOF_sessions').filter(function (s) { return !s.formation; }).length;
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  t.appendChild(tuile('Vendu en ' + a.annee, OF.eur(a.realise_vendu),
+    OF.plur(a.realise_sessions, 'session') + ' · ' + OF.plur(a.realise_places, 'place')));
+  t.appendChild(tuile('Facturé en ' + a.annee, OF.eur(a.realise_facture),
+    a.realise_vendu
+      ? Math.round(100 * (a.realise_facture || 0) / a.realise_vendu) + ' % du vendu'
+      : 'rien de vendu'));
+  t.appendChild(tuile('Reste à facturer', OF.eur(a.reste_a_facturer),
+    'vendu non encore émis', (a.reste_a_facturer || 0) > 0 ? 'negatif' : ''));
+  if (a.recettes) {
+    var ecart = a.ecart_vendu || 0;
+    t.appendChild(tuile('Face au projeté', (ecart >= 0 ? '+' : '') + OF.eur(ecart),
+      OF.pourcent(a.realise_vendu, a.recettes) + ' de ' + OF.eur(a.recettes) + ' projetés',
+      ecart >= 0 ? 'positif' : 'negatif'));
+  }
+  zone.appendChild(t);
+
+  realiseGraphe(zone, annees);
+  realiseTableau(zone, annees);
+
+  var aFaire = [];
+  if (sansAnnee) {
+    aFaire.push('<b>' + OF.plur(sansAnnee, 'session') + '</b> sans année : '
+      + OF.accord(sansAnnee, 'sa date de début tombe', 'leur date de début tombe')
+      + ' sur une année absente de la table Annees. '
+      + OF.accord(sansAnnee, 'Elle ne compte', 'Elles ne comptent') + ' nulle part ici.');
+  }
+  if (sansFormation) {
+    aFaire.push('<b>' + OF.plur(sansFormation, 'session') + '</b> sans formation : '
+      + OF.accord(sansFormation, 'son produit SmartOF n\'est pas rapproché',
+          'leurs produits SmartOF ne sont pas rapprochés')
+      + ' du catalogue. Le widget SmartOF permet de trancher, dans « La liaison avec le '
+      + 'catalogue ».');
+  }
+  if (aFaire.length) {
+    var ul = document.createElement('ul');
+    ul.className = 'a-faire';
+    ul.style.marginTop = '16px';
+    ul.innerHTML = aFaire.map(function (x) { return '<li>' + x + '</li>'; }).join('');
+    zone.appendChild(ul);
+  }
+
+  var note = document.createElement('p');
+  note.className = 'aide';
+  note.textContent = 'Le vendu est la somme des budgets des commanditaires : ce qui est '
+    + 'engagé. Le facturé est la somme des factures émises, nette des avoirs : ce qui est '
+    + 'parti au client. L\'écart entre les deux est ce qui reste à facturer, et il ne se '
+    + 'verrait pas si on les confondait.';
+  zone.appendChild(note);
+}
+
+function realiseAbsent(zone) {
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc';
+  p.innerHTML = 'Le réalisé n\'est pas encore raccroché aux années et aux formations. Le widget '
+    + '<b>SmartOF</b> rapatrie les sessions, les commanditaires et les factures ; le script '
+    + '<code>realise_smartof_grist.js</code> leur pose ensuite l\'année et la formation, et '
+    + 'calcule les totaux que cette section lit. À lancer une fois, après un premier '
+    + 'rafraîchissement réussi.';
+  zone.appendChild(p);
+}
+
+/* La pile n'est pas un artifice : facturé + reste à facturer = vendu, donc
+   l'empilement est exact. Le projeté, lui, n'est pas une quatrième part — il
+   ne s'additionne à rien — c'est un repère sur la même échelle, dessiné comme
+   l'objectif l'est plus haut. */
+function realiseGraphe(zone, annees) {
+  var series = ['Facturé', 'Reste à facturer'];
+  var parts = [
+    function (a) { return a.realise_facture || 0; },
+    function (a) { return Math.max(0, (a.realise_vendu || 0) - (a.realise_facture || 0)); },
+  ];
+  if (!annees.some(function (a) { return a.realise_vendu; })) return;
+
+  var pilotee = OF.parId(OF.table('Annees'))[idAnnee];
+  var groupes = annees.map(function (a) {
+    var v = parts.map(function (f) { return f(a); });
+    var vendu = v[0] + v[1];
+    return {
+      libelle: String(a.annee), parts: v, repere: a.recettes || 0,
+      bulle: '<b>' + a.annee + '</b>'
+        + '<span class="second">vendu : ' + OF.eur(vendu) + '</span>'
+        + series.map(function (s, i) {
+            return v[i] ? '<span class="second">' + OF.echappe(s) + ' : ' + OF.eur(v[i])
+              + '</span>' : '';
+          }).join('')
+        + (a.recettes ? '<span class="second">projeté : ' + OF.eur(a.recettes)
+            + ' · réalisation ' + Math.round(100 * vendu / a.recettes) + ' %</span>' : '')
+    };
+  });
+
+  G.figure(zone, {
+    titre: 'Le vendu face au projeté, année par année',
+    sous: 'La hauteur totale est le vendu ; le trait pointillé est la projection, sur la '
+      + 'même échelle. La part claire est ce qui reste à facturer.',
+    haut: 230,
+    series: series.map(function (s, i) {
+      return { nom: s, valeur: pilotee ? OF.eur(parts[i](pilotee)) + ' en ' + pilotee.annee : '' };
+    }),
+    chiffres: G.chiffres('Les chiffres',
+      ['Mesure'].concat(annees.map(function (a) { return String(a.annee); })),
+      [['Projeté'].concat(annees.map(function (a) { return a.recettes ? OF.eur(a.recettes) : '—'; })),
+       ['Vendu'].concat(annees.map(function (a) { return a.realise_vendu ? OF.eur(a.realise_vendu) : '—'; })),
+       ['Facturé'].concat(annees.map(function (a) { return a.realise_facture ? OF.eur(a.realise_facture) : '—'; })),
+       ['Reste à facturer'].concat(annees.map(function (a) {
+         var r = (a.realise_vendu || 0) - (a.realise_facture || 0);
+         return r ? OF.eur(r) : '—';
+       })),
+       ['Réalisation'].concat(annees.map(function (a) {
+         return a.recettes ? Math.round(100 * (a.realise_vendu || 0) / a.recettes) + ' %' : '—';
+       }))]),
+    dessin: function (larg, haut) {
+      return G.empilees({
+        larg: larg, haut: haut, groupes: groupes, series: series,
+        total: true, formatVal: OF.eur, unite: 'en €',
+        description: 'Vendu par année, réparti entre facturé et reste à facturer, '
+          + 'avec la projection en repère.'
+      });
+    }
+  });
+}
+
+function realiseTableau(zone, annees) {
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Année</th>'
+    + '<th class="calcule">Sessions</th><th>Places</th>'
+    + '<th>Projeté</th><th>Vendu</th><th>Réalisation</th>'
+    + '<th>Facturé</th><th>Reste à facturer</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  annees.forEach(function (a) {
+    if (!a.realise_sessions && !a.recettes) return;
+    var tr = document.createElement('tr');
+    if (a.id === idAnnee) tr.className = 'courante';
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = String(a.annee);
+    tr.appendChild(td);
+    [[OF.ent(a.realise_sessions), true], [OF.ent(a.realise_places), false],
+     [a.recettes ? OF.eur(a.recettes) : '—', false],
+     [OF.eur(a.realise_vendu), false],
+     [a.recettes ? OF.pourcent(a.realise_vendu, a.recettes) : '—', false],
+     [OF.eur(a.realise_facture), false],
+     [OF.eur(a.reste_a_facturer), false]
+    ].forEach(function (c) {
+      var tdc = document.createElement('td');
+      tdc.className = 'calcul' + (c[1] ? ' calcule' : '');
+      tdc.textContent = c[0];
+      tr.appendChild(tdc);
+    });
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  if (corps.children.length) zone.appendChild(defilant(t));
 }
 
 /* ------------------------------------------- externe, mixte et interne --- */

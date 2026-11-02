@@ -170,6 +170,43 @@ par session que calcule le document.
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
 
+## Le réalisé dans le pilotage
+
+Une fois le réalisé rapatrié, il reste à le raccrocher : les lignes venues de SmartOF sont
+plates et ne savent pas à quelle année ni à quelle formation elles appartiennent. Le script
+`realise_smartof_grist.js` pose ce raccrochage, puis les totaux qui en découlent.
+
+| Table | Ce que le script y ajoute |
+|---|---|
+| `SmartOF_sessions` | `annee` (d'après la date de début), `formation` (par la correspondance des produits), places vendues, vendu, facturé net, reste à facturer |
+| `SmartOF_commanditaires`, `SmartOF_factures` | l'année et la formation de leur session ; le net HT après avoirs |
+| `Annees` | sessions, places, vendu et facturé réalisés, reste à facturer, écart au projeté, taux de réalisation |
+| `Formations` | les mêmes, pour l'année pilotée |
+
+La date de début peut arriver en date Grist, en texte ISO ou en horodatage numérique selon la
+façon dont la colonne a été créée : les trois sont acceptées, et une année hors de 1990–2100
+est traitée comme absente plutôt que de polluer la table `Annees`.
+
+### Le piège que cette section doit empêcher
+
+Le projeté couvre l'année entière ; le réalisé ne couvre que ce que le widget a rapatrié.
+Comparés tels quels, un import de trente jours face à une projection annuelle ressemble à un
+effondrement commercial. La section **« Ce qui s'est vraiment vendu »** annonce donc, avant tout
+chiffre, **la période réellement chargée** — nombre de sessions, première et dernière date.
+Avant de lire un écart, faites une reprise « Tout, sans filtre de date ».
+
+Deux autres silences sont rompus : les sessions dont l'année n'existe pas dans `Annees`, et
+celles dont le produit n'est pas rapproché au catalogue, sont comptées et annoncées. Elles ne
+figurent dans aucun total, et il vaut mieux le savoir.
+
+### Le graphique
+
+La hauteur de chaque barre est le **vendu**, décomposé en facturé et reste à facturer —
+l'empilement est exact, puisque les deux s'additionnent. Le **projeté** n'est pas une troisième
+part : il ne s'additionne à rien, c'est un repère en trait pointillé sur la même échelle, le
+même idiome que l'objectif plus haut dans l'écran. Quand le repère et le total se croisent, le
+total passe au-dessus du repère pour rester lisible.
+
 ## Reprendre le réalisé depuis SmartOF
 
 Le prévisionnel vit dans Grist, le réalisé vit dans SmartOF. Les rapprocher demandait
@@ -408,11 +445,12 @@ Un type dont ni les jours disponibles ni les salles détenues ne sont renseigné
 capacité calculable : il est compté à part, sous « Capacité inconnue », plutôt que d'être
 affiché à 0 % comme s'il était vide.
 
-## Le pilotage, en six sections
+## Le pilotage, en sept sections
 
-Six sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
+Sept sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
 résultat, tableau complet), **De quoi elle est faite** (par domaine, puis la rentabilité
-formation par formation), **Pour qui** (ce que portent les formations vendues à l'extérieur,
+formation par formation), **Ce qui s'est vraiment vendu** (le réalisé SmartOF face au projeté),
+**Pour qui** (ce que portent les formations vendues à l'extérieur,
 et ce que portent celles qui ne servent que le CHU), **Ce qui peut encore bouger** (part des
 places déjà affectée, puis les hypothèses), **Scénarios**, **Ce que l'on vise** (les
 objectifs).
