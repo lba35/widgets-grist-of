@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=22">
+<link rel="stylesheet" href="commun.css?v=23">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -27,7 +27,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=22"></script>
+<script src="commun.js?v=23"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -42,7 +42,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v22';
+var VERSION = 'v23';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -699,10 +699,53 @@ function publicVise(f) {
   g.className = 'grille';
   var ignores = ajouterChamps(g, f, [
     ['segments', 'Segments de marché visés'], ['metiers', 'Métiers concernés'],
-    ['enjeux', 'Enjeux'], ['obligations', 'Obligations réglementaires']
+    ['enjeux', 'Enjeux'], ['obligations', 'Obligations réglementaires'],
+    ['perimetre_force', 'Périmètre forcé (vide = déduit des segments)']
   ]);                                   // re-rendu complet : change les colonnes projetées
   zone.appendChild(g);
   if (ignores.length) zone.appendChild(noteIgnores(ignores));
+  zone.appendChild(perimetre(f));
+  return zone;
+}
+
+/* Le périmètre n'est pas une saisie de plus : il se déduit des segments visés
+   juste au-dessus. On le montre parce qu'il décide de la place de la formation
+   dans le pilotage — et on montre d'où il vient, pour qu'un périmètre surprenant
+   se corrige à sa source plutôt qu'en le forçant. */
+function perimetre(f) {
+  if (f.perimetre === undefined) return document.createDocumentFragment();
+  var p = OF.texte(f.perimetre);
+  var zone = document.createElement('p');
+  zone.className = p === 'À qualifier' ? 'alerte-bloc' : 'note';
+  zone.style.marginTop = '12px';
+
+  var noms = OF.refs(f.segments).map(function (id) {
+    var s = OF.parId(OF.table('Segments'))[id];
+    return s ? { nom: OF.texte(s.intitule), interne: !!s.interne } : null;
+  }).filter(Boolean);
+
+  var dit = {
+    'Externe': 'Vendue à l\'extérieur',
+    'Interne': 'Interne au CHU',
+    'Mixte': 'Vendue à l\'extérieur et servie en interne',
+    'À qualifier': 'Périmètre indéterminé'
+  }[p] || p;
+
+  var d = '<b>' + OF.echappe(dit) + '</b>';
+  if (p === 'À qualifier') {
+    d += ' — aucun segment de marché n\'est visé. Tant qu\'il n\'y en a pas, cette formation '
+      + 'ne compte dans aucun panier du pilotage. Ce n\'est pas la même chose qu\'une '
+      + 'formation interne.';
+  } else if (OF.texte(f.perimetre_force)) {
+    d += ' — forcé à la main. Les segments visés donneraient « '
+      + OF.echappe(OF.texte(f.perimetre_deduit)) + ' ». Vider le forçage pour revenir au déduit.';
+  } else {
+    d += ' — déduit des segments visés : '
+      + noms.map(function (s) {
+          return OF.echappe(s.nom) + (s.interne ? ' <i>(interne)</i>' : '');
+        }).join(', ') + '.';
+  }
+  zone.innerHTML = d;
   return zone;
 }
 

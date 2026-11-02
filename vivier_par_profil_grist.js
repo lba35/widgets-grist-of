@@ -62,6 +62,10 @@
   const HEURES_PAR_INTERVENANT_AN = 42;
 
   /* ----------------------------------------------------------- plomberie --- */
+  /* Le script lit l'identifiant du document dans l'URL de la page. Collé
+     ailleurs — dans le cadre d'un widget, ou sur la page qui héberge les
+     widgets — il prendrait n'importe quel segment d'URL pour un identifiant
+     et taperait dans le vide. Autant le dire tout de suite et clairement. */
   function trouverDocId() {
     const p = location.pathname.split('/').filter(Boolean);
     const i = p.indexOf('doc');
@@ -70,26 +74,114 @@
     if (p[0] && p[0].length >= 10) return p[0];
     return null;
   }
-  const docId = trouverDocId();
-  if (!docId) {
-    console.error("Document introuvable dans l'URL. Relancer depuis la page du document.");
+
+  function refuser(titre, lignes) {
+    console.error('✗ ' + titre);
+    lignes.forEach((l) => console.log('   ' + l));
+  }
+
+  if (window.top !== window.self) {
+    refuser('La console parle au cadre du widget, pas à la page Grist.', [
+      'Dans la console de Chrome, en haut, un menu déroulant indique le',
+      'contexte (il affiche sans doute « ' + location.hostname + ' »).',
+      'Le basculer sur « top », puis recoller le script.',
+      '',
+      'Page actuelle : ' + location.href,
+    ]);
     return;
   }
+
+  const docId = trouverDocId();
+  const surGrist = /\/(o\/[^/]+\/)?docs?\//.test(location.pathname)
+    || /grist/i.test(location.hostname);
+  if (!docId || !surGrist) {
+    refuser("Ce n'est pas la page d'un document Grist.", [
+      'Page actuelle : ' + location.href,
+      '',
+      'Ouvrir le document dans un onglet — une adresse de la forme',
+      'https://grist.numerique.gouv.fr/o/docs/<identifiant>/<page>',
+      '— puis coller le script dans la console de CET onglet.',
+      '',
+      "Si le widget est à l'écran, vérifier aussi que le menu de contexte",
+      'de la console est bien sur « top ».',
+    ]);
+    return;
+  }
+
   const BASE = location.origin + '/api/docs/' + docId;
   const journal = [];
 
+  /* Un dernier contrôle avant d'écrire quoi que ce soit : l'API répond-elle
+     bien pour CE document ? Un 404 renvoyant du HTML veut dire qu'on n'est
+     pas sur une instance Grist. */
+  try {
+    const sonde = await fetch(BASE + '/tables', { credentials: 'same-origin' });
+    if (!sonde.ok) {
+      const txt = (await sonde.text()).slice(0, 200);
+      refuser("L'API Grist ne répond pas pour ce document (" + sonde.status + ').', [
+        'Identifiant déduit de l\'URL : ' + docId,
+        'Adresse interrogée : ' + BASE + '/tables',
+        '',
+        /^\s*<!DOCTYPE/i.test(txt)
+          ? "La réponse est une page HTML : cet hôte n'est pas une instance Grist."
+          : txt,
+        '',
+        'Recoller le script depuis la page du document.',
+      ]);
+      return;
+    }
+  } catch (e) {
+    refuser("L'API Grist est injoignable depuis cette page.", [
+      String(e && e.message ? e.message : e),
+      'Adresse interrogée : ' + BASE + '/tables',
+    ]);
+    return;
+  }
+  console.log('Document : ' + docId + ' sur ' + location.origin);
+
+  const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /* Un pare-feu applicatif (Incapsula, sur grist.numerique.gouv.fr) coupe les
+     rafales d'appels venues du navigateur. Sa réponse est une page de défi en
+     403, pas un message de l'API : on la reconnaît, on souffle, on recommence.
+     Et on espace les écritures d'entrée de jeu, ce qui évite le plus souvent
+     d'en arriver là. */
+  const PAUSE = 150;
+  const REPRISES = [3000, 9000, 20000];
+  function estUnPareFeu(statut, txt) {
+    return (statut === 403 || statut === 503)
+      && /_Incapsula_Resource|<html|NOINDEX|Request unsuccessful/i.test(txt);
+  }
+
   async function api(methode, chemin, corps, ecriture = true) {
     if (ecriture && ESSAI_A_BLANC) { journal.push(methode + ' ' + chemin); return {}; }
-    const r = await fetch(BASE + chemin, {
-      method: methode,
-      credentials: 'same-origin',
-      headers: corps ? { 'Content-Type': 'application/json' } : {},
-      body: corps ? JSON.stringify(corps) : undefined,
-    });
-    const txt = await r.text();
-    if (!r.ok) throw new Error(methode + ' ' + chemin + ' → ' + r.status + ' ' + txt.slice(0, 400));
-    if (ecriture) journal.push(methode + ' ' + chemin);
-    return txt ? JSON.parse(txt) : {};
+    for (let essai = 0; ; essai++) {
+      if (ecriture) await attendre(PAUSE);
+      const r = await fetch(BASE + chemin, {
+        method: methode,
+        credentials: 'same-origin',
+        headers: corps ? { 'Content-Type': 'application/json' } : {},
+        body: corps ? JSON.stringify(corps) : undefined,
+      });
+      const txt = await r.text();
+      if (r.ok) {
+        if (ecriture) journal.push(methode + ' ' + chemin);
+        return txt ? JSON.parse(txt) : {};
+      }
+      if (estUnPareFeu(r.status, txt) && essai < REPRISES.length) {
+        const d = REPRISES[essai];
+        console.warn(`    [pare-feu] coupure sur ${methode} ${chemin} — reprise dans ${d / 1000} s`);
+        await attendre(d);
+        continue;
+      }
+      if (estUnPareFeu(r.status, txt)) {
+        throw new Error('Le pare-feu de l\'instance bloque les appels (' + r.status + ').\n'
+          + '   Ce n\'est pas un refus de Grist : la réponse est une page de défi.\n'
+          + '   Attendre une minute, recharger la page, et relancer le script :\n'
+          + '   il reprend là où il s\'est arrêté, sans refaire ce qui est fait.');
+      }
+      throw new Error(methode + ' ' + chemin + ' → ' + r.status + ' ' + txt.slice(0, 400));
+    }
   }
   const tables = async () => (await api('GET', '/tables', null, false)).tables.map(t => t.id);
   const colonnes = async t => (await api('GET', `/tables/${t}/columns`, null, false)).columns;

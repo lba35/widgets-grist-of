@@ -169,6 +169,61 @@ par session que calcule le document.
 Le pilotage compte les formations qui couvrent leurs coûts directs et celles qui ne les couvrent
 pas, sur l'année pilotée, et les classe en barres horizontales de part et d'autre de zéro.
 
+## Interne et externe
+
+Toutes les formations ne sont pas vendues. Certaines ne servent que le personnel du CHU, et
+mêlées aux autres elles faussaient deux lectures : la recette, en y mélangeant de la
+refacturation interne, et la rentabilité, en faisant passer une mission de service pour un
+échec commercial.
+
+**La marque se pose sur le segment, pas sur la formation.** Chaque ligne de vente — inter
+comme intra — porte déjà un segment : une case `interne` sur la table `Segments` suffit, et le
+partage tombe alors euro par euro. Une formation vendue aux deux publics n'a rien de
+particulier, ses lignes se répartissent d'elles-mêmes. Posée sur la formation, la marque aurait
+obligé à ranger une formation mixte d'un côté ou de l'autre, et les recettes seraient restées
+indivises.
+
+**Condition préalable** : un segment qui mélange les deux publics — « CHU et GHT », où le CHU
+est interne et le GHT est client — doit être coupé en deux. Le script le signale, dans la
+console et dans une colonne `alerte_perimetre`, mais ne le fait pas : découper un segment
+déplace des lignes de vente, cela ne se décide pas dans un script.
+
+**Le périmètre d'une formation se déduit** de ses segments visés : `Externe`, `Interne`,
+`Mixte`, ou `À qualifier` quand aucun segment n'est renseigné. Une colonne de forçage permet
+de corriger les cas que les segments n'expriment pas ; laissée vide, le déduit s'applique. La
+fiche affiche le périmètre et d'où il vient, pour qu'un périmètre surprenant se corrige à sa
+source plutôt qu'en le forçant.
+
+Attention à la nuance : **« À qualifier » n'est pas « interne »**. Une formation sans segment
+visé est une fiche à compléter, pas une décision de ne pas la vendre. Elle ne compte dans
+aucun panier, et le pilotage le dit.
+
+### Deux découpages, deux tableaux
+
+| Ce qui se partage | Par quoi | Combien de paniers |
+|---|---|---|
+| Recettes, places | le **segment** de chaque ligne de vente | 2 — exact |
+| Sessions, coûts, nombre de formations | le **périmètre** de la formation | 3 — dont les mixtes |
+
+Les réunir dans une seule grille ferait lire la recette interne comme « la recette des
+formations internes », ce qu'elle n'est pas : une partie vient des formations mixtes. D'où deux
+tableaux séparés dans la section « Pour qui » du pilotage, et aucun prorata inventé sur les
+sessions.
+
+### Effet sur la rentabilité
+
+Les formations purement internes sortent du classement de rentabilité : elles ne sont pas
+vendues, leur résultat n'aurait pas de sens, et les compter parmi les déficitaires ferait
+passer une mission de service pour un échec. Une tuile dit combien ont été mises de côté et ce
+qu'elles coûtent ; leurs coûts restent comptés dans la section « Pour qui ».
+
+### Passer à ce modèle
+
+Le script `perimetre_interne_grist.js`, collé dans la console du navigateur sur la page du
+document. Tant qu'il n'a pas tourné, la section « Pour qui » le dit et n'affiche rien.
+Après, il reste à cocher « Public interne au CHU » sur les segments concernés : tant que rien
+n'est coché, tout est externe et la séparation ne montre rien.
+
 ## Le vivier se tient par profil
 
 Un formateur GSU est habilité au GSU, pas à « GSU 2 - Etudiants - 3j ». Jusqu'à la v21, le
@@ -241,12 +296,14 @@ Un type dont ni les jours disponibles ni les salles détenues ne sont renseigné
 capacité calculable : il est compté à part, sous « Capacité inconnue », plutôt que d'être
 affiché à 0 % comme s'il était vide.
 
-## Le pilotage, en cinq sections
+## Le pilotage, en six sections
 
-Cinq sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
+Six sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
 résultat, tableau complet), **De quoi elle est faite** (par domaine, puis la rentabilité
-formation par formation), **Ce qui peut encore bouger** (part des places déjà affectée, puis
-les hypothèses), **Scénarios**, **Ce que l'on vise** (les objectifs).
+formation par formation), **Pour qui** (ce que portent les formations vendues à l'extérieur,
+et ce que portent celles qui ne servent que le CHU), **Ce qui peut encore bouger** (part des
+places déjà affectée, puis les hypothèses), **Scénarios**, **Ce que l'on vise** (les
+objectifs).
 
 Le taux que le document appelle `remplissage_inter` est affiché comme ce qu'il est : la **part
 des places ouvertes déjà affectée** à un segment. Les places étant attribuées comme si tout se
@@ -332,7 +389,7 @@ Lues : `Annees`, `Formations`, `Projections`, `Ventes_inter`, `Ventes_intra`, `S
 `Obligations`, `Intervenants`, `Intervenants_formation`, `Vivier`, `Vivier_profils`, `Charge`, `Salles`,
 `Types_salles`, `Besoins_salles`, `Tarifs`, `Categories_tarifaires`, `Parametres`.
 
-Écrites : `Formations` (définition), `Projections` et `Ventes_inter` (sessions et places),
+Écrites : `Formations` (définition, périmètre forcé), `Projections` et `Ventes_inter` (sessions et places),
 `Besoins_salles` (type de salle, nombre, jours), `Intervenants_formation` (profils mobilisés),
 `Vivier_profils` (vivier, départs, heures par intervenant), `Salles` (jours disponibles par
 type et par année), `Annees`

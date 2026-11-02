@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=22">
+<link rel="stylesheet" href="commun.css?v=23">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=22"></script>
-<script src="graphes.js?v=22"></script>
+<script src="commun.js?v=23"></script>
+<script src="graphes.js?v=23"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v22';
+var VERSION = 'v23';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'Parametres', 'Domaines', 'Categories_tarifaires', 'Typologies'];
@@ -176,6 +176,11 @@ function pageProjection() {
     'Quels domaines portent la recette, et quelles formations couvrent leurs coûts.'));
   grapheDomaines(zone, annees);
   rentabilite(zone);
+
+  zone.appendChild(section('Pour qui',
+    'Ce que portent les formations vendues à l\'extérieur, et ce que portent celles '
+    + 'qui ne servent que le CHU.'));
+  perimetreSection(zone, annees);
 
   zone.appendChild(section('Ce qui peut encore bouger',
     'Ce qui est déjà attribué à un segment, ce qui reste à vendre, et ce que '
@@ -749,7 +754,22 @@ function rentabilite(zone) {
   if (!comptes.length) return;
 
   /* le document ne donne un résultat que si les coûts sont calculables */
-  var chiffres = comptes.filter(function (c) { return c.cout || c.recette; });
+  var tousChiffres = comptes.filter(function (c) { return c.cout || c.recette; });
+  if (!tousChiffres.length) return;
+
+  /* Une formation purement interne n'a pas vocation à couvrir ses coûts : elle
+     n'est pas vendue. La compter parmi les déficitaires ferait passer une
+     mission de service pour un échec commercial. On la met de côté, et on dit
+     combien on en a mises de côté. */
+  var parF = OF.parId(OF.table('Formations'));
+  var estInterne = function (c) {
+    var f = parF[c.formation];
+    return !!f && OF.texte(f.perimetre) === 'Interne';
+  };
+  var internes = perimetreDisponible() ? tousChiffres.filter(estInterne) : [];
+  var chiffres = perimetreDisponible()
+    ? tousChiffres.filter(function (c) { return !estInterne(c); })
+    : tousChiffres;
   if (!chiffres.length) return;
 
   var gagnantes = chiffres.filter(function (c) { return c.resultat > 0; });
@@ -757,6 +777,7 @@ function rentabilite(zone) {
   var neutres = chiffres.filter(function (c) { return c.resultat === 0; });
   var projetees = {};
   chiffres.forEach(function (c) { projetees[c.formation] = 1; });
+  internes.forEach(function (c) { projetees[c.formation] = 1; });
   var sansSession = OF.table('Formations').filter(function (f) {
     return OF.texte(f.intitule).trim() && !projetees[f.id];
   }).length;
@@ -775,6 +796,10 @@ function rentabilite(zone) {
   }
   t.appendChild(tuile('Sans session projetée', OF.ent(sansSession),
     'ni gain ni perte cette année'));
+  if (internes.length) {
+    t.appendChild(tuile('Internes, mises de côté', OF.ent(internes.length),
+      OF.eur(somme(internes, 'cout')) + ' de coûts, hors jugement de rentabilité'));
+  }
   zone.appendChild(t);
 
   /* le classement : les plus gros écarts, dans les deux sens */
@@ -805,7 +830,7 @@ function rentabilite(zone) {
       ? 'Les ' + Math.ceil(garde / 2) + ' plus rentables et les ' + Math.floor(garde / 2)
         + ' plus déficitaires, sur ' + OF.plur(classees.length, 'formation') + ' projetée'
         + (classees.length >= 2 ? 's' : '') + '.'
-      : 'Toutes les formations qui portent des sessions cette année.',
+      : 'Toutes les formations vendues qui portent des sessions cette année.',
     chiffres: G.chiffres('Toutes les formations',
       ['Formation', 'Sessions', 'Places', 'Recette', 'Coûts', 'Résultat', 'Par session'],
       classees.map(function (c) {
@@ -827,7 +852,17 @@ function rentabilite(zone) {
     + 'd\'une session ne dépend ni du nombre de sessions ni du nombre d\'inscrits. Une '
     + 'formation à perte ne le devient donc pas moins en ouvrant des sessions — elle perd '
     + 'davantage. Le seuil se joue sur le nombre de places vendues par session, et la fiche '
-    + 'de chaque formation l\'indique sous son coût de revient.';
+    + 'de chaque formation l\'indique sous son coût de revient.'
+    + (internes.length
+       ? ' ' + OF.plur(internes.length, 'formation') + ' purement '
+         + OF.accord(internes.length, 'interne', 'internes') + ' '
+         + OF.accord(internes.length, 'ne figure', 'ne figurent') + ' pas ici : '
+         + OF.accord(internes.length, 'elle n\'est pas vendue', 'elles ne sont pas vendues')
+         + ', et ' + OF.accord(internes.length, 'son résultat', 'leur résultat')
+         + ' n\'aurait pas de sens. '
+         + OF.accord(internes.length, 'Son coût reste compté', 'Leurs coûts restent comptés')
+         + ' dans la section « Pour qui ».'
+       : '');
   zone.appendChild(n);
 }
 
@@ -982,6 +1017,226 @@ function grapheDomaines(zone, annees) {
       });
     }
   });
+}
+
+/* ------------------------------------------- externe, mixte et interne --- */
+/* Deux granularités, et il ne faut pas les mélanger. Les recettes et les
+   places portent un segment : elles se séparent exactement, en deux. Les
+   sessions, les coûts et les formations sont portés par la formation, qui
+   peut viser les deux publics : trois paniers, et aucun prorata inventé. */
+function perimetreDisponible() {
+  return colonneExiste('Annees', 'recettes_externes')
+    && colonneExiste('Formations', 'perimetre');
+}
+
+var PANIERS = [
+  { cle: 'Externe', libelle: 'Vendues à l\'extérieur', suffixe: 'externes' },
+  { cle: 'Mixte', libelle: 'Les deux publics', suffixe: 'mixtes' },
+  { cle: 'Interne', libelle: 'Internes au CHU', suffixe: 'internes' },
+];
+
+function perimetreSection(zone, annees) {
+  if (!perimetreDisponible()) { perimetreAbsent(zone); return; }
+  var a = OF.parId(OF.table('Annees'))[idAnnee];
+  if (!a) return;
+
+  var ext = a.recettes_externes || 0, intr = a.recettes_internes || 0;
+  var tout = ext + intr;
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  t.appendChild(tuile('Recettes vendues à l\'extérieur', OF.eur(ext),
+    tout ? Math.round(100 * ext / tout) + ' % de la recette ' + a.annee : 'aucune recette',
+    ''));
+  t.appendChild(tuile('Recettes internes au CHU', OF.eur(intr),
+    tout ? Math.round(100 * intr / tout) + ' % de la recette ' + a.annee
+         : 'aucune recette interne'));
+  t.appendChild(tuile('Places vendues à l\'extérieur', OF.ent(a.places_externes),
+    'sur ' + OF.ent((a.places_externes || 0) + (a.places_internes || 0)) + ' places vendues'));
+  zone.appendChild(t);
+
+  perimetreGraphe(zone, annees);
+  perimetreTableau(zone, a);
+
+  /* Une formation sans segment visé n'est pas interne : c'est une fiche à
+     compléter. Les confondre ferait passer un oubli pour une décision. */
+  var aQualifier = OF.table('Formations').filter(function (f) {
+    return OF.texte(f.perimetre) === 'À qualifier';
+  });
+  if (aQualifier.length) {
+    var av = document.createElement('p');
+    av.className = 'alerte-bloc';
+    av.style.marginTop = '18px';
+    av.textContent = OF.plur(aQualifier.length, 'formation') + ' ne '
+      + OF.accord(aQualifier.length, 'vise', 'visent') + ' aucun segment : leur périmètre est '
+      + 'indéterminé, et ' + OF.accord(aQualifier.length, 'elle ne compte', 'elles ne comptent')
+      + ' dans aucun panier. Le public visé se renseigne sur la fiche formation.';
+    zone.appendChild(av);
+  }
+
+  var note = document.createElement('p');
+  note.className = 'aide';
+  note.textContent = 'Les deux tableaux ne découpent pas la même chose. Le premier partage les '
+    + 'euros par segment : exact, parce que chaque ligne de vente porte le sien. Le second '
+    + 'range les formations selon le public qu\'elles visent, et une formation vendue aux deux '
+    + 'a ses recettes des deux côtés du premier tableau tout en occupant une seule ligne du '
+    + 'second. Ses sessions et ses coûts ne se divisent pas : les répartir au prorata '
+    + 'inventerait une précision qui n\'existe pas.';
+  zone.appendChild(note);
+}
+
+function perimetreAbsent(zone) {
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc';
+  p.innerHTML = 'Le document ne distingue pas encore l\'interne de l\'externe. Le script '
+    + '<code>perimetre_interne_grist.js</code> ajoute une case « Public interne au CHU » sur '
+    + 'la table Segments, en déduit le périmètre de chaque formation, et ventile les recettes '
+    + 'et les places. Il se colle dans la console du navigateur, sur la page du document.';
+  zone.appendChild(p);
+}
+
+function perimetreGraphe(zone, annees) {
+  var series = ['Vendu à l\'extérieur', 'Interne au CHU'];
+  var colonnes = [
+    function (a) { return a.recettes_externes || 0; },
+    function (a) { return a.recettes_internes || 0; },
+  ];
+  if (!annees.some(function (a) { return colonnes[0](a) || colonnes[1](a); })) return;
+
+  var pilotee = OF.parId(OF.table('Annees'))[idAnnee];
+  var groupes = annees.map(function (a) {
+    var parts = colonnes.map(function (f) { return f(a); });
+    var total = parts[0] + parts[1];
+    return {
+      libelle: String(a.annee), parts: parts,
+      bulle: '<b>' + a.annee + '</b> — ' + OF.eur(total)
+        + series.map(function (s, i) {
+          return parts[i] ? '<span class="second">' + OF.echappe(s) + ' : ' + OF.eur(parts[i])
+            + ' · ' + Math.round(100 * parts[i] / total) + ' %</span>' : '';
+        }).join('')
+    };
+  });
+
+  G.figure(zone, {
+    titre: 'Recettes selon le public, année par année',
+    sous: 'Le partage se fait ligne de vente par ligne de vente, selon son segment.',
+    haut: 210,
+    series: series.map(function (s, i) {
+      return { nom: s, valeur: pilotee
+        ? OF.eur(colonnes[i](pilotee)) + ' en ' + pilotee.annee : '' };
+    }),
+    chiffres: G.chiffres('Les chiffres',
+      ['Public'].concat(annees.map(function (a) { return String(a.annee); })),
+      series.map(function (s, i) {
+        return [s].concat(annees.map(function (a) {
+          return colonnes[i](a) ? OF.eur(colonnes[i](a)) : '—';
+        }));
+      }).concat([['Part externe'].concat(annees.map(function (a) {
+        var tt = colonnes[0](a) + colonnes[1](a);
+        return tt ? Math.round(100 * colonnes[0](a) / tt) + ' %' : '—';
+      }))])),
+    dessin: function (larg, haut) {
+      return G.empilees({
+        larg: larg, haut: haut, groupes: groupes, series: series,
+        total: true, unite: 'en €',
+        description: 'Recettes par année, réparties entre public externe et public interne.'
+      });
+    }
+  });
+}
+
+/* Deux tableaux et non un seul, parce que ce sont deux découpages différents
+   du même euro. Les recettes et les places se partagent par SEGMENT : exact,
+   deux cases. Les sessions, les coûts et les formations se partagent par
+   FORMATION : trois cases, dont une pour celles qui visent les deux publics.
+   Les réunir dans une seule grille ferait lire la recette interne comme
+   « la recette des formations internes », ce qu'elle n'est pas — une partie
+   vient des formations mixtes. */
+function perimetreTableau(zone, a) {
+  var t1 = document.createElement('table');
+  t1.className = 'matrice';
+  t1.innerHTML = '<thead><tr><th class="gauche">Ce qui est vendu, par public</th>'
+    + '<th class="calcule">Recettes</th><th>Part</th><th>Places</th></tr></thead>';
+  var c1 = document.createElement('tbody');
+  var totR = (a.recettes_externes || 0) + (a.recettes_internes || 0);
+  var totP = (a.places_externes || 0) + (a.places_internes || 0);
+  [['À l\'extérieur', 'recettes_externes', 'places_externes',
+    'établissements clients, quelle que soit la formation'],
+   ['En interne', 'recettes_internes', 'places_internes',
+    'personnel du CHU, quelle que soit la formation']
+  ].forEach(function (L) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = L[0];
+    var sd = document.createElement('div');
+    sd.className = 'second';
+    sd.textContent = L[3];
+    td.appendChild(sd);
+    tr.appendChild(td);
+    [[OF.eur(a[L[1]]), true],
+     [totR ? Math.round(100 * (a[L[1]] || 0) / totR) + ' %' : '—', false],
+     [OF.ent(a[L[2]]), false]
+    ].forEach(function (c) {
+      var tdc = document.createElement('td');
+      tdc.className = 'calcul' + (c[1] ? ' calcule' : '');
+      tdc.textContent = c[0];
+      tr.appendChild(tdc);
+    });
+    c1.appendChild(tr);
+  });
+  var tot1 = document.createElement('tr');
+  tot1.className = 'total';
+  tot1.innerHTML = '<td class="gauche libelle" style="font-weight:600">Total ' + a.annee + '</td>'
+    + '<td class="calcul calcule" style="font-weight:600">' + OF.eur(totR) + '</td>'
+    + '<td class="calcul">100 %</td>'
+    + '<td class="calcul">' + OF.ent(totP) + '</td>';
+  c1.appendChild(tot1);
+  t1.appendChild(c1);
+  zone.appendChild(defilant(t1));
+
+  var t2 = document.createElement('table');
+  t2.className = 'matrice';
+  t2.style.marginTop = '22px';
+  t2.innerHTML = '<thead><tr><th class="gauche">Les formations, par périmètre</th>'
+    + '<th class="calcule">Formations</th><th>Sessions</th><th>Coûts</th></tr></thead>';
+  var c2 = document.createElement('tbody');
+  PANIERS.forEach(function (p) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = p.libelle;
+    var sd = document.createElement('div');
+    sd.className = 'second';
+    sd.textContent = p.cle === 'Mixte'
+      ? 'visent les deux publics : leurs sessions ne se divisent pas'
+      : (p.cle === 'Externe' ? 'ne visent que des segments externes'
+                             : 'ne visent que des segments internes');
+    td.appendChild(sd);
+    tr.appendChild(td);
+    [[OF.ent(a['formations_' + p.suffixe]), true],
+     [OF.ent(a['sessions_' + p.suffixe]), false],
+     [OF.eur(a['couts_' + p.suffixe]), false]
+    ].forEach(function (c) {
+      var tdc = document.createElement('td');
+      tdc.className = 'calcul' + (c[1] ? ' calcule' : '');
+      tdc.textContent = c[0];
+      tr.appendChild(tdc);
+    });
+    c2.appendChild(tr);
+  });
+  var sommeCol = function (champ) {
+    return PANIERS.reduce(function (n, p) { return n + (a[champ + p.suffixe] || 0); }, 0);
+  };
+  var tot2 = document.createElement('tr');
+  tot2.className = 'total';
+  tot2.innerHTML = '<td class="gauche libelle" style="font-weight:600">Total ' + a.annee + '</td>'
+    + '<td class="calcul calcule" style="font-weight:600">' + OF.ent(sommeCol('formations_')) + '</td>'
+    + '<td class="calcul">' + OF.ent(sommeCol('sessions_')) + '</td>'
+    + '<td class="calcul">' + OF.eur(sommeCol('couts_')) + '</td>';
+  c2.appendChild(tot2);
+  t2.appendChild(c2);
+  zone.appendChild(defilant(t2));
 }
 
 /* Ce taux s'appelait « remplissage », et c'était trompeur : vous affectez les
