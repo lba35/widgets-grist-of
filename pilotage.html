@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=36">
+<link rel="stylesheet" href="commun.css?v=37">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=36"></script>
-<script src="graphes.js?v=36"></script>
+<script src="commun.js?v=37"></script>
+<script src="graphes.js?v=37"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v36';
+var VERSION = 'v37';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -1361,19 +1361,22 @@ function croisementAnnee(zone, a, avecRealise) {
 
 /* Le détail par formation : c'est là qu'on voit laquelle décroche. */
 function detailFormations(zone, a) {
-  var T = tableSessions() || 'SmartOF_sessions';
+  /* Le même filtre que les totaux — sinon les deux lectures de la même page
+     se contredisent, et c'est précisément ce qui est arrivé. */
+  var tri = triSessions(function (s, T) { return champDe(s, T, 'annee') === a.id; });
+  var T = tri.table || 'SmartOF_sessions';
   var par = {};
-  OF.table(T).forEach(function (s) {
-    if (champDe(s, T, 'annee') !== a.id) return;
+  tri.retenues.forEach(function (s) {
     var f = champDe(s, T, 'formation') || 0;
     var c = par[f] = par[f] || { formation: f, sessions: 0, places: 0, vendu: 0, facture: 0 };
     c.sessions++;
-    c.places += champDe(s, T, 'places_vendues') || 0;
-    c.vendu += champDe(s, T, 'vendu') || 0;
-    c.facture += champDe(s, T, 'facture_ht') || 0;
+    c.places += nombre(champDe(s, T, 'places_vendues'));
+    c.vendu += nombre(champDe(s, T, 'vendu'));
+    c.facture += nombre(champDe(s, T, 'facture_ht'));
   });
   var lignes = Object.keys(par).map(function (k) { return par[k]; });
-  if (!lignes.length) return;
+  if (!lignes.length) { noteExclusions(zone, tri, 'pour ' + a.annee); return; }
+  noteExclusions(zone, tri, 'pour ' + a.annee);
 
   /* le projeté de chaque formation, pour l'année */
   var projete = {};
@@ -1622,18 +1625,86 @@ function realiseDisponible() { return diagnosticRealise().pret; }
    du document, et c'est déjà ce que fait le tableau « formation par
    formation » depuis le début. On ne fait que grouper. */
 function nombre(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+
+/* UNE SESSION ARCHIVÉE EST EXCLUE — MAIS JAMAIS EN SILENCE
+   C'est le défaut qui a coûté le plus cher : le total d'une année excluait
+   les sessions archivées, le tableau par formation juste en dessous ne les
+   excluait pas. La même page affichait donc « 0 € vendu » en tuile et
+   481 846 € trois centimètres plus bas, sans que rien ne l'explique. Les deux
+   lectures passent maintenant par cette seule fonction, et le nombre d'exclues
+   est affiché dès qu'il y en a.
+
+   La valeur est lue prudemment : la colonne est censée être booléenne, mais
+   un import peut y déposer du texte, et en JavaScript la chaîne « false » est
+   vraie. On ne considère archivé que ce qui se lit comme tel. */
+function estArchive(v) {
+  if (v === true) return true;
+  if (typeof v === 'string') {
+    var t = v.trim().toLowerCase();
+    return t === 'true' || t === 'oui' || t === 'vrai' || t === '1' || t === 'y' || t === 'yes';
+  }
+  return false;
+}
+
+/* Les sessions retenues, et ce qui a été écarté — pour pouvoir le dire. */
+function triSessions(filtre) {
+  var T = tableSessions();
+  var out = { table: T, retenues: [], archivees: 0, sansAnnee: 0, total: 0 };
+  if (!T) return out;
+  OF.table(T).forEach(function (sess) {
+    if (filtre && !filtre(sess, T)) return;
+    out.total++;
+    if (estArchive(champDe(sess, T, 'archive'))) { out.archivees++; return; }
+    if (!champDe(sess, T, 'annee')) { out.sansAnnee++; return; }
+    out.retenues.push(sess);
+  });
+  return out;
+}
+
+/* Le mot que l'écran dit quand des sessions ont été écartées. Un zéro
+   inexpliqué envoie chercher la panne au mauvais endroit. */
+function noteExclusions(zone, tri, contexte) {
+  if (!tri.archivees && !tri.sansAnnee) return;
+  var p = document.createElement('p');
+  var toutes = tri.archivees === tri.total && tri.total > 0;
+  p.className = toutes ? 'alerte-bloc' : 'note';
+  var bouts = [];
+  if (tri.archivees) {
+    bouts.push('<b>' + OF.plur(tri.archivees, 'session') + ' sur ' + tri.total
+      + '</b> ' + OF.accord(tri.archivees, 'est marquée archivée', 'sont marquées archivées')
+      + ' et ne ' + OF.accord(tri.archivees, 'compte', 'comptent') + ' pas');
+  }
+  if (tri.sansAnnee) {
+    bouts.push('<b>' + OF.plur(tri.sansAnnee, 'session') + '</b> ' +
+      OF.accord(tri.sansAnnee, 'n\'a', 'n\'ont') + ' pas d\'année');
+  }
+  p.innerHTML = bouts.join(', et ') + (contexte ? ' ' + contexte : '') + '.';
+  zone.appendChild(p);
+
+  if (toutes) {
+    var q = document.createElement('p');
+    q.className = 'note';
+    q.innerHTML = 'Toutes les sessions étant écartées, les totaux valent zéro alors que les '
+      + 'montants existent bien. La colonne <code>archive</code> vient du champ '
+      + '<code>archive</code> de l\'API SmartOF : si l\'API y met autre chose qu\'un '
+      + 'booléen — une date, un libellé, la chaîne « false » — tout se retrouve marqué '
+      + 'archivé. <b>Relancer le rafraîchissement dans le widget SmartOF</b> réécrit cette '
+      + 'colonne correctement et les totaux reviennent ; à défaut, vider la colonne dans '
+      + '<code>SmartOF_sessions</code> a le même effet.';
+    zone.appendChild(q);
+  }
+}
 var VIDE = { sessions: 0, places: 0, vendu: 0, facture: 0, reste: 0 };
 var REALISE_CACHE = null;
 
 function realiseParAnnee() {
   if (REALISE_CACHE) return REALISE_CACHE;
-  var T = tableSessions();
+  var tri = triSessions(null);
+  var T = tri.table;
   var par = {};
   if (T) {
-    OF.table(T).forEach(function (sess) {
-      if (champDe(sess, T, 'archive')) return;
+    tri.retenues.forEach(function (sess) {
       var idA = champDe(sess, T, 'annee');
-      if (!idA) return;
       var c = par[idA] = par[idA]
         || { sessions: 0, places: 0, vendu: 0, facture: 0 };
       c.sessions++;
@@ -1705,6 +1776,8 @@ function realiseSection(zone, annees) {
       + 'alors un import incomplet, pas un retard.';
     zone.appendChild(p);
   }
+
+  noteExclusions(zone, triSessions(null), 'sur l\'ensemble du document');
 
   var T = tableSessions() || 'SmartOF_sessions';
   var sansAnnee = OF.table(T).filter(function (s) { return !champDe(s, T, 'annee'); }).length;

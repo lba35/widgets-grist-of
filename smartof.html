@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=36">
+<link rel="stylesheet" href="commun.css?v=37">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,7 +25,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=36"></script>
+<script src="commun.js?v=37"></script>
 <script>
 /* =========================================================================
    SmartOF → Grist, à la demande.
@@ -60,7 +60,7 @@
    ========================================================================= */
 'use strict';
 
-var VERSION = 'v36';
+var VERSION = 'v37';
 
 var TABLES = ['Parametres', 'Formations', 'Annees',
   'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures'];
@@ -872,9 +872,26 @@ function sessionVersGrist(s, fiches) {
     produit_uid: pi.produitFormationUid || '',
     produit_nom: OF.texte(pi.meta && pi.meta.nom),
     code_gesform: codeGesform(pi, fiches[pi.produitFormationUid]),
-    archive: !!s.archive,
+    archive: archiveVrai(s.archive),
     maj_le: OF.texte(s.updatedAt),
   };
+}
+
+/* ARCHIVÉ OU NON : NE PAS SE FIER À `!!`
+   `!!s.archive` paraissait sûr. Il ne l'est pas : si l'API renvoie la chaîne
+   « false », une date, ou n'importe quel libellé, `!!` répond vrai — et toutes
+   les sessions se retrouvent archivées. Le pilotage les exclut alors des
+   totaux, qui tombent à zéro pendant que le détail, lui, affiche les montants.
+   On ne marque donc archivé que ce qui se lit comme tel. */
+function archiveVrai(v) {
+  if (v === true) return true;
+  if (typeof v === 'number') return v === 1;
+  if (typeof v === 'string') {
+    var t = v.trim().toLowerCase();
+    return t === 'true' || t === 'oui' || t === 'vrai' || t === '1'
+      || t === 'y' || t === 'yes';
+  }
+  return false;
 }
 
 /* LES MONTANTS D'UNE FACTURE
@@ -1064,7 +1081,7 @@ function factureVersGrist(f) {
       || sommeMontants(f.priceDetails, estTTC)
       || sommeMontants(f.priceDetails, toujours) || 0,
     avoirs: avoirsDe(f),
-    archive: !!f.archived,
+    archive: archiveVrai(f.archived),
   };
 }
 

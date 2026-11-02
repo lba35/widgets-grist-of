@@ -577,6 +577,25 @@ ce que faisait le tableau « formation par formation » depuis le début. On ne 
 **grouper**. Le pilotage n'exige donc plus aucune colonne d'agrégat dans `Annees` ; il lui faut
 seulement que chaque session sache son année et son montant.
 
+### Les sessions archivées : exclues, jamais en silence
+
+C'est la cause réelle des zéros, et elle a résisté longtemps parce qu'elle était cohérente :
+le total d'une année excluait les sessions archivées, le tableau par formation juste en dessous
+ne les excluait pas. La même page affichait « 0 € vendu » en tuile et 481 846 € trois
+centimètres plus bas. Les formules d'agrégat de Grist, qui excluaient elles aussi, étaient donc
+justes — c'est la donnée qui était fausse.
+
+Deux corrections, l'une sur la lecture, l'autre sur l'écriture :
+
+- **Un seul filtre.** Les totaux et le détail passent par la même fonction. Les deux lectures
+  d'une même page ne peuvent plus se contredire, et le nombre de sessions écartées est affiché
+  dès qu'il y en a — avec une alerte explicite quand elles le sont toutes.
+- **`!!` n'est pas un test de booléen.** Le widget SmartOF écrivait `archive: !!s.archive`.
+  Si l'API renvoie la chaîne `"false"`, une date ou un libellé, `!!` répond **vrai** : toutes
+  les sessions se retrouvent archivées. Un `archiveVrai()` ne retient désormais que ce qui se
+  lit comme archivé. Relancer le rafraîchissement SmartOF réécrit la colonne et les totaux
+  reviennent.
+
 Une cellule en erreur, elle, ne vaut pas zéro : Grist la renvoie sous la forme
 `['E', 'TypeDErreur', …]`, le widget la reconnaît, et **l'annonce sur les deux écrans** — la
 synthèse comme l'onglet d'année. Un zéro faux ne se voit pas ; il faut le dire là où il
