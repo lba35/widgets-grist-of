@@ -237,9 +237,16 @@ comparaison champ à champ a trouvé une vraie différence.
 | `SmartOF_produits` | `produit_uid` | code Gesform, intitulé, et la formation du catalogue |
 | `SmartOF_sessions` | `uid` | dates, statut, lieu, produit, code Gesform |
 | `SmartOF_commanditaires` | `uid` | session, entreprise, type, **nombre d'apprenants**, **budget** |
+| `SmartOF_factures` | `uid` | numéro, session, commanditaire, statut, dates, **HT**, **TTC**, avoirs |
 
-C'est le commanditaire qui porte le vendu : c'est par lui que les apprenants sont inscrits, et
-c'est lui qui porte le budget.
+C'est le commanditaire qui porte le **vendu** : c'est par lui que les apprenants sont inscrits,
+et c'est lui qui porte le budget. La facture porte le **facturé**, et les deux ne coïncident
+pas — l'écart entre budget vendu et montant facturé, c'est ce qui reste à facturer.
+
+Les montants d'une facture vivent dans `priceDetails` et `avoirsSummary`, dont la documentation
+ne donne pas la forme. L'extraction cherche donc le champ par son nom — `totalHT`, `total_ht`,
+`amountExcludingTax` — et déduit le HT du TTC moins la TVA quand il n'est pas publié. Si rien
+n'est reconnu, le rapport le dit au lieu de laisser lire « 0 € facturé ».
 
 Les colonnes manquantes sont listées à l'écran, avec un bouton qui les crée. Les tables
 absentes, elles, sont signalées sans être créées : ajouter une table est une décision de

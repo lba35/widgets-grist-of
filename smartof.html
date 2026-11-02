@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=25">
+<link rel="stylesheet" href="commun.css?v=27">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,7 +25,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=25"></script>
+<script src="commun.js?v=27"></script>
 <script>
 /* =========================================================================
    SmartOF → Grist, à la demande.
@@ -60,11 +60,14 @@
    ========================================================================= */
 'use strict';
 
-var VERSION = 'v25';
+var VERSION = 'v27';
 
 var TABLES = ['Parametres', 'Formations', 'Annees',
-  'SmartOF_sessions', 'SmartOF_commanditaires'];
-var RELIRE = ['SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires', 'Parametres'];
+  'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures'];
+function relire() {
+  return ['SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures']
+    .map(vraiNom).concat(['Parametres']);
+}
 
 /* Les clés de configuration, dans Parametres. */
 var CLE_BASE = 'smartof_base';
@@ -240,8 +243,12 @@ function sectionConnexion() {
     'L\'adresse et la clé vivent dans la table Parametres du document, jamais dans ce '
     + 'fichier : il est servi depuis un dépôt public.'));
 
-  var g = document.createElement('div');
+  /* Un champ de mot de passe hors formulaire fait râler le navigateur et
+     désoriente les gestionnaires de mots de passe : on l'enveloppe, et on
+     neutralise l'envoi puisqu'il n'y a rien à envoyer. */
+  var g = document.createElement('form');
   g.className = 'grille';
+  g.addEventListener('submit', function (ev) { ev.preventDefault(); });
   g.appendChild(champReglage(CLE_BASE, 'Adresse de l\'API',
     'https://europe-west3-votre-instance.cloudfunctions.net/external/api'));
   g.appendChild(champReglage(CLE_JETON, 'Clé d\'intégration (lecture seule)', 'smk_…', true));
@@ -357,12 +364,13 @@ function sectionStructure() {
     'Un enregistrement réel, champ par champ. À regarder une fois, pour vérifier que la '
     + 'correspondance ci-dessous porte bien sur ce qui existe.'));
 
-  ['session_formations', 'commanditaires'].forEach(function (col) {
+  ['session_formations', 'commanditaires', 'factures'].forEach(function (col) {
     var b = document.createElement('button');
     b.type = 'button';
     b.className = 'outil';
     b.style.marginRight = '8px';
-    b.textContent = col === 'commanditaires' ? 'Voir un commanditaire' : 'Voir une session';
+    b.textContent = col === 'commanditaires' ? 'Voir un commanditaire'
+      : (col === 'factures' ? 'Voir une facture' : 'Voir une session');
     b.addEventListener('click', function () { montrerStructure(col, b); });
     zone.appendChild(b);
   });
@@ -485,10 +493,19 @@ function sectionColonnes() {
   if (tablesAbsentes.length) {
     var a = document.createElement('p');
     a.className = 'alerte-bloc';
-    a.textContent = OF.plur(tablesAbsentes.length, 'table') + ' ' + OF.accord(tablesAbsentes.length, 'manque', 'manquent')
-      + ' : ' + tablesAbsentes.map(function (m) { return m[0]; }).join(', ')
-      + '. À créer dans le document — un widget ne crée pas de table, c\'est une décision '
-      + 'de structure.';
+    var voisines = tablesVoisines();
+    a.innerHTML = OF.echappe(OF.plur(tablesAbsentes.length, 'table') + ' '
+        + OF.accord(tablesAbsentes.length, 'introuvable', 'introuvables') + ' : ')
+      + '<b>' + OF.echappe(tablesAbsentes.map(function (m) { return m[0]; }).join(', ')) + '</b>. '
+      + (voisines.length
+         ? 'Le document en contient ' + OF.accord(voisines.length, 'une autre', 'd\'autres')
+           + ' dont le nom évoque SmartOF : <b>' + OF.echappe(voisines.join(', '))
+           + '</b>. Si c\'est ' + OF.accord(voisines.length, 'celle-là', 'l\'une d\'elles')
+           + ', renommez-' + OF.accord(voisines.length, 'la', 'la') + ' — la casse et le '
+           + 'pluriel comptent, Grist dérive l\'identifiant du libellé.'
+         : 'Le document ne contient aucune autre table dont le nom évoque SmartOF. '
+           + OF.accord(tablesAbsentes.length, 'Elle est', 'Elles sont') + ' à créer — un '
+           + 'widget ne crée pas de table, c\'est une décision de structure.');
     zone.appendChild(a);
   }
 
@@ -531,7 +548,7 @@ function defilantLocal(t) {
 /* ------------------------------------------------- la correspondance vue */
 function sectionCorrespondance() {
   var zone = document.createElement('div');
-  var produits = OF.table('SmartOF_produits');
+  var produits = OF.table(vraiNom('SmartOF_produits'));
   if (!produits.length) return zone;
 
   var orphelins = produits.filter(function (p) { return !p.formation; });
@@ -606,8 +623,8 @@ function choixFormation(p) {
   s.innerHTML = options.join('');
   s.value = String(p.formation || 0);
   s.addEventListener('change', function () {
-    OF.appliquer([['UpdateRecord', 'SmartOF_produits', p.id, { formation: +s.value || 0 }]],
-      ['SmartOF_produits'], function () { rendre(); });
+    OF.appliquer([['UpdateRecord', vraiNom('SmartOF_produits'), p.id, { formation: +s.value || 0 }]],
+      [vraiNom('SmartOF_produits')], function () { rendre(); });
   });
   return s;
 }
@@ -674,6 +691,20 @@ var SCHEMAS = {
     ['archive', 'Bool', 'Archivée'],
     ['maj_le', 'Text', 'Modifiée le'],
   ],
+  SmartOF_factures: [
+    ['uid', 'Text', 'Identifiant SmartOF'],
+    ['numero', 'Text', 'Numéro de facture'],
+    ['session_uid', 'Text', 'Session'],
+    ['commanditaire_uid', 'Text', 'Commanditaire'],
+    ['destinataire', 'Text', 'Destinataire'],
+    ['statut', 'Text', 'Statut'],
+    ['date', 'Text', 'Émise le'],
+    ['echeance', 'Text', 'Échéance'],
+    ['montant_ht', 'Numeric', 'Montant HT'],
+    ['montant_ttc', 'Numeric', 'Montant TTC'],
+    ['avoirs', 'Numeric', 'Avoirs'],
+    ['archive', 'Bool', 'Archivée'],
+  ],
   SmartOF_commanditaires: [
     ['uid', 'Text', 'Identifiant SmartOF'],
     ['session_uid', 'Text', 'Session'],
@@ -685,12 +716,43 @@ var SCHEMAS = {
   ],
 };
 
+/* Grist dérive l'identifiant d'une table de son libellé : « SmartOF Produits »
+   donne SmartOF_Produits, « SmartOF produits » donne SmartOF_produits. Exiger
+   une casse exacte ferait déclarer absente une table qui est là, sous les
+   yeux. On résout donc au plus proche, et on retient le nom réel. */
+var NOMS_REELS = {};
+
+function resoudreTables() {
+  var connues = Object.keys(OF.doc.colonnes || {});
+  NOMS_REELS = {};
+  Object.keys(SCHEMAS).forEach(function (attendu) {
+    if (connues.indexOf(attendu) >= 0) { NOMS_REELS[attendu] = attendu; return; }
+    var bas = attendu.toLowerCase();
+    var proche = connues.filter(function (t) { return t.toLowerCase() === bas; })[0];
+    NOMS_REELS[attendu] = proche || null;
+  });
+  return NOMS_REELS;
+}
+function vraiNom(t) { return NOMS_REELS[t] || t; }
+
+/* Les tables du document dont le nom évoque SmartOF : sert à montrer ce que
+   le widget voit vraiment quand il ne trouve pas ce qu'il cherche. */
+function tablesVoisines() {
+  /* Les tables déjà reconnues ne sont pas des candidates : les citer ferait
+     croire qu'il faut renommer celles qui marchent. */
+  var prises = Object.keys(NOMS_REELS).map(function (t) { return NOMS_REELS[t]; });
+  return Object.keys(OF.doc.colonnes || {})
+    .filter(function (t) { return /smartof/i.test(t) && prises.indexOf(t) < 0; }).sort();
+}
+
 function colonnesManquantes() {
   var manque = [];
+  resoudreTables();
   Object.keys(SCHEMAS).forEach(function (t) {
-    var meta = OF.doc.colonnes[t];
+    var reel = NOMS_REELS[t];
+    var meta = reel && OF.doc.colonnes[reel];
     if (!meta || !Object.keys(meta).length) { manque.push([t, null]); return; }
-    SCHEMAS[t].forEach(function (c) { if (!meta[c[0]]) manque.push([t, c]); });
+    SCHEMAS[t].forEach(function (c) { if (!meta[c[0]]) manque.push([reel, c]); });
   });
   return manque;
 }
@@ -746,6 +808,76 @@ function sessionVersGrist(s, fiches) {
   };
 }
 
+/* LES MONTANTS D'UNE FACTURE
+   La documentation nomme `priceDetails` et `avoirsSummary` sans dire ce
+   qu'ils contiennent. Plutôt que de parier sur `totalHT`, on cherche la
+   première valeur numérique dont le nom de champ correspond — et le bouton
+   « Voir une facture » permet de vérifier sur un cas réel. Ce qui n'est pas
+   trouvé vaut zéro et se voit, plutôt que de faire échouer la reprise. */
+/* Les noms de champ sont en camelCase (`totalHT`) ou en serpent (`total_ht`) :
+   un motif qui exigerait un séparateur avant « HT » raterait le premier, et
+   un motif insensible à la casse confondrait `totalTVA` avec `totalHT`. D'où
+   un test par nom plutôt qu'une expression unique. */
+function estHT(k) {
+  var bas = k.toLowerCase();
+  return /HT$/.test(k) || /(^|_)ht$/.test(bas) || /horstaxe|hors_taxe/.test(bas)
+    || /excl/.test(bas);
+}
+function estTTC(k) {
+  var bas = k.toLowerCase();
+  return /TTC$/.test(k) || /(^|_)ttc$/.test(bas) || /toutestaxes/.test(bas)
+    || /incl/.test(bas);
+}
+function estTVA(k) {
+  var bas = k.toLowerCase();
+  return /TVA$/.test(k) || /(^|_)tva$/.test(bas) || /\bvat\b/.test(bas) || /taxe?s?$/.test(bas);
+}
+
+function montant(objet, test, profondeur) {
+  if (!objet || typeof objet !== 'object') return null;
+  var cles = Object.keys(objet);
+  for (var i = 0; i < cles.length; i++) {
+    var v = objet[cles[i]];
+    if (typeof v === 'number' && test(cles[i])) return v;
+  }
+  if ((profondeur || 0) >= 2) return null;
+  for (var j = 0; j < cles.length; j++) {
+    var sous = montant(objet[cles[j]], test, (profondeur || 0) + 1);
+    if (sous !== null) return sous;
+  }
+  return null;
+}
+
+/* Si le HT n'est pas publié mais que TTC et TVA le sont, il se déduit —
+   mieux vaut une soustraction exacte qu'un zéro qui se lira « rien ». */
+function montantHT(f) {
+  var ht = montant(f.priceDetails, estHT);
+  if (ht !== null) return ht;
+  var ttc = montant(f.priceDetails, estTTC);
+  var tva = montant(f.priceDetails, estTVA);
+  if (ttc !== null && tva !== null) return ttc - tva;
+  return 0;
+}
+
+function factureVersGrist(f) {
+  var a = f.association || {};
+  var m = f.meta || {};
+  return {
+    uid: f.factureUid || '',
+    numero: OF.texte(f.factureNumber),
+    session_uid: a.sessionUid || '',
+    commanditaire_uid: a.commanditaireUid || '',
+    destinataire: OF.texte(m.nomDuDestinataire),
+    statut: OF.texte(m.internalStatus),
+    date: OF.texte(f.createdAt),
+    echeance: OF.texte(f.dateEcheance),
+    montant_ht: montantHT(f),
+    montant_ttc: montant(f.priceDetails, estTTC) || 0,
+    avoirs: montant(f.avoirsSummary, function () { return true; }) || 0,
+    archive: !!f.archived,
+  };
+}
+
 function commanditaireVersGrist(c) {
   return {
     uid: c.commanditaireUid || '',
@@ -791,6 +923,44 @@ function fusionner(table, voulus, cle, bilan) {
   return actions;
 }
 
+/* Les noms de collection ne suivent pas les adresses de la documentation :
+   la page « sessions-de-formation » expose /v2/session_formations. On essaie
+   donc les formes plausibles — et surtout, un échec ici n'interrompt rien.
+   Les fiches produit ne servent qu'à retrouver le code Gesform quand
+   l'instance ne le porte pas : sans elles, on continue avec ce qu'on a, et
+   on le dit. */
+var COLLECTIONS_PRODUITS = [
+  '/v2/produit_formations', '/v2/produits_formations',
+  '/v2/produit_formation', '/v2/produits-de-formation',
+];
+
+function lireProduits(dire, bilan) {
+  var reste = COLLECTIONS_PRODUITS.slice();
+  function suivant() {
+    if (!reste.length) {
+      bilan.avertissements.push('Aucune collection de produits de formation n\'a répondu ('
+        + COLLECTIONS_PRODUITS.join(', ') + '). Le code Gesform n\'a été cherché que sur '
+        + 'l\'instance du produit portée par chaque session. Si des produits ressortent sans '
+        + 'code, c\'est de là que ça vient — dites-moi le vrai nom de la collection.');
+      return Promise.resolve([]);
+    }
+    var chemin = reste.shift();
+    return parcourir(chemin, { limit: 200 }, function (n) {
+      dire('Produits de formation : ' + n + ' lus…');
+    }).then(function (liste) {
+      if (chemin !== COLLECTIONS_PRODUITS[0]) {
+        bilan.avertissements.push('Les produits de formation ont répondu sur ' + chemin
+          + ' et non sur ' + COLLECTIONS_PRODUITS[0] + '.');
+      }
+      return liste;
+    }).catch(function (e) {
+      if (/404|inconnue/i.test(e.message)) return suivant();
+      throw e;
+    });
+  }
+  return suivant();
+}
+
 /* -------------------------------------------------------- le parcours --- */
 function rafraichir() {
   if (enCours) { OF.signaler('Un rafraîchissement est déjà en cours'); return; }
@@ -808,12 +978,10 @@ function rafraichir() {
   var dire = function (t) { if (etat) etat.textContent = t; };
   var bilan = { lues: 0, pages: 0, ajoutees: 0, corrigees: 0, inchangees: 0, avertissements: [] };
 
-  var sessions = [], commanditaires = [], fiches = {};
+  var sessions = [], commanditaires = [], factures = [], fiches = {};
 
   dire('Lecture des produits de formation…');
-  parcourir('/v2/produits-de-formation', { limit: 200 }, function (n) {
-    dire('Produits de formation : ' + n + ' lus…');
-  }).then(function (liste) {
+  lireProduits(dire, bilan).then(function (liste) {
     liste.forEach(function (p) {
       if (p.produitFormationUid) fiches[p.produitFormationUid] = p;
     });
@@ -830,6 +998,17 @@ function rafraichir() {
     });
   }).then(function (liste) {
     commanditaires = liste;
+    bilan.lues += liste.length;
+    dire('Lecture des factures…');
+    return parcourir('/v2/factures', parametresDeFenetre(), function (n) {
+      dire('Factures : ' + n + ' lues…');
+    }).catch(function (e) {
+      /* le facturé est un complément : son absence ne doit pas emporter le vendu */
+      bilan.avertissements.push('Factures non reprises : ' + e.message);
+      return [];
+    });
+  }).then(function (liste) {
+    factures = liste;
     bilan.lues += liste.length;
     dire('Écriture dans le document…');
 
@@ -852,20 +1031,35 @@ function rafraichir() {
     });
 
     var actions = []
-      .concat(fusionner('SmartOF_produits', Object.keys(produits).map(function (k) {
+      .concat(fusionner(vraiNom('SmartOF_produits'), Object.keys(produits).map(function (k) {
         var p = produits[k];
         /* on ne réécrit jamais un rapprochement fait à la main : si la ligne
            existe déjà avec une formation, on laisse le choix de l'utilisateur */
-        var deja = OF.table('SmartOF_produits').filter(function (l) {
+        var deja = OF.table(vraiNom('SmartOF_produits')).filter(function (l) {
           return OF.texte(l.produit_uid) === p.produit_uid;
         })[0];
         if (deja && deja.formation) { var c = {}; Object.keys(p).forEach(function (k2) { c[k2] = p[k2]; }); c.formation = deja.formation; return c; }
         return p;
       }), 'produit_uid', bilan))
-      .concat(fusionner('SmartOF_sessions',
+      .concat(fusionner(vraiNom('SmartOF_sessions'),
         sessions.map(function (s) { return sessionVersGrist(s, fiches); }), 'uid', bilan))
-      .concat(fusionner('SmartOF_commanditaires',
-        commanditaires.map(commanditaireVersGrist), 'uid', bilan));
+      .concat(fusionner(vraiNom('SmartOF_commanditaires'),
+        commanditaires.map(commanditaireVersGrist), 'uid', bilan))
+      .concat(factures.length
+        ? fusionner(vraiNom('SmartOF_factures'), factures.map(factureVersGrist), 'uid', bilan)
+        : []);
+
+    /* Un montant à zéro sur toutes les factures veut dire que la forme de
+       priceDetails n'est pas celle qu'on cherche : mieux vaut le dire que
+       laisser lire « 0 € facturé ». */
+    if (factures.length) {
+      var avecHT = factures.filter(function (f) { return factureVersGrist(f).montant_ht; }).length;
+      if (!avecHT) {
+        bilan.avertissements.push('Aucun montant n\'a pu être lu dans priceDetails sur '
+          + OF.plur(factures.length, 'facture') + '. Le bouton « Voir une facture » montre la '
+          + 'structure réelle : dites-moi le nom des champs de montant et je les épingle.');
+      }
+    }
 
     if (sansCode) {
       bilan.avertissements.push(OF.plur(sansCode, 'produit') + ' sans code Gesform dans '
@@ -883,7 +1077,7 @@ function rafraichir() {
       terminer(bilan, dire);
       return null;
     }
-    return OF.appliquer(actions, RELIRE, function () {}).then(function () {
+    return OF.appliquer(actions, relire(), function () {}).then(function () {
       bilan.quand = quandMaintenant();
       return ecrireReglage(CLE_DERNIER, bilan.quand);
     }).then(function () { terminer(bilan, dire); });
@@ -944,7 +1138,15 @@ function sectionRapport(r) {
 
 /* ------------------------------------------------------------ montage -- */
 function demarrer() {
-  rendre();
+  /* Une table trouvée sous un autre nom n'a pas été chargée par TABLES : on
+     va la chercher avant d'afficher quoi que ce soit, sinon elle paraîtrait
+     vide alors qu'elle est pleine. */
+  resoudreTables();
+  var aCharger = Object.keys(NOMS_REELS)
+    .filter(function (t) { return NOMS_REELS[t] && TABLES.indexOf(NOMS_REELS[t]) < 0; })
+    .map(function (t) { return NOMS_REELS[t]; });
+  if (!aCharger.length) { rendre(); return; }
+  OF.charger(aCharger).then(rendre, rendre);
 }
 
 OF.$('rafraichir').addEventListener('click', rafraichir);
@@ -954,6 +1156,7 @@ window.__smartof = {
   demarrer: function () { OF.initialiser(TABLES, demarrer); },
   parcourir: parcourir, appeler: appeler, curseurDe: curseurDe,
   parametresDeFenetre: parametresDeFenetre, rendre: rendre,
+  vraiNom: vraiNom, tablesVoisines: tablesVoisines, colonnesManquantes: colonnesManquantes,
 };
 </script>
 </body>
