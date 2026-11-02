@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=34">
+<link rel="stylesheet" href="commun.css?v=35">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=34"></script>
-<script src="graphes.js?v=34"></script>
+<script src="commun.js?v=35"></script>
+<script src="graphes.js?v=35"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v34';
+var VERSION = 'v35';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -1583,10 +1583,30 @@ function realiseSection(zone, annees) {
 
   var aFaire = [];
   if (sansAnnee) {
-    aFaire.push('<b>' + OF.plur(sansAnnee, 'session') + '</b> sans année : '
-      + OF.accord(sansAnnee, 'sa date de début tombe', 'leur date de début tombe')
-      + ' sur une année absente de la table Annees. '
-      + OF.accord(sansAnnee, 'Elle ne compte', 'Elles ne comptent') + ' nulle part ici.');
+    /* Une session hors plan n'est pas forcément une anomalie : les années
+       antérieures à la première année déclarée sont le plus souvent des
+       essais qu'on ne veut justement pas compter. Le dire autrement qu'un
+       défaut évite de chercher à réparer ce qui va bien. */
+    var premiere = OF.anneesTriees()[0];
+    var anciennes = 0;
+    OF.table(T).forEach(function (s) {
+      if (champDe(s, T, 'annee')) return;
+      var d = champDe(s, T, 'date_debut');
+      var an = 0;
+      if (typeof d === 'number' && d > 1000000000) an = new Date(d * 1000).getFullYear();
+      else if (OF.texte(d)) an = parseInt(String(d).slice(0, 4), 10) || 0;
+      if (premiere && an && an < premiere.annee) anciennes++;
+    });
+    aFaire.push(anciennes === sansAnnee
+      ? '<b>' + OF.plur(sansAnnee, 'session') + '</b> ' + OF.accord(sansAnnee, 'est antérieure',
+          'sont antérieures') + ' à ' + (premiere ? premiere.annee : 'votre première année')
+        + ' et ne ' + OF.accord(sansAnnee, 'compte', 'comptent') + ' nulle part. '
+        + 'Si ce sont des essais, c\'est le comportement voulu : rien à faire.'
+      : '<b>' + OF.plur(sansAnnee, 'session') + '</b> sans année : '
+        + OF.accord(sansAnnee, 'sa date de début tombe', 'leur date de début tombe')
+        + ' sur une année absente de la table Annees'
+        + (anciennes ? ', dont ' + anciennes + ' avant ' + premiere.annee : '')
+        + '. ' + OF.accord(sansAnnee, 'Elle ne compte', 'Elles ne comptent') + ' nulle part ici.');
   }
   if (sansFormation) {
     aFaire.push('<b>' + OF.plur(sansFormation, 'session') + '</b> sans formation : '

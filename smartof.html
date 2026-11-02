@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=34">
+<link rel="stylesheet" href="commun.css?v=35">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,7 +25,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=34"></script>
+<script src="commun.js?v=35"></script>
 <script>
 /* =========================================================================
    SmartOF → Grist, à la demande.
@@ -60,7 +60,7 @@
    ========================================================================= */
 'use strict';
 
-var VERSION = 'v34';
+var VERSION = 'v35';
 
 var TABLES = ['Parametres', 'Formations', 'Annees',
   'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures'];
@@ -926,6 +926,56 @@ function montant(objet, test, profondeur) {
    montre la forme réelle au lieu d'afficher un zéro muet. */
 function toujours() { return true; }
 
+/* ============================ LA FORME EXACTE, D'APRÈS LE SCHÉMA DE L'API ==
+   `budget` (commanditaire) et `priceDetails` (facture) sont des LISTES de
+   lignes tarifaires, de la même forme :
+       { libelle, quantite, unite, prixUnitaireHT, tva, … }
+   Le montant HT d'une ligne vaut donc quantite × prixUnitaireHT, et rien
+   d'autre. Lire « le premier nombre rencontré » donnerait le prix unitaire
+   d'une seule ligne — juste assez plausible pour ne pas se voir.
+
+   `avoirsSummary` donne ses totaux en CENTIMES : totalHTCts, totalTTCCts.
+   Pris pour des euros, ils seraient faux d'un facteur cent.
+
+   Ces lectures-ci sont explicites. La lecture tolérante qui suit ne sert plus
+   que de filet, si SmartOF change la forme de ses réponses. */
+
+function lignesTarifaires(liste) {
+  if (!Array.isArray(liste) || !liste.length) return null;
+  var ht = 0, ttc = 0, vu = false;
+  liste.forEach(function (l) {
+    if (!l || typeof l !== 'object' || typeof l.prixUnitaireHT !== 'number') return;
+    var q = typeof l.quantite === 'number' ? l.quantite : 1;
+    var montantLigne = l.prixUnitaireHT * q;
+    /* `tva` peut être un taux (0,2) ou un pourcentage (20) : au-delà de 1,
+       c'est forcément un pourcentage — aucune TVA ne vaut 2000 %. */
+    var tva = typeof l.tva === 'number' ? (l.tva > 1 ? l.tva / 100 : l.tva) : 0;
+    ht += montantLigne;
+    ttc += montantLigne * (1 + tva);
+    vu = true;
+  });
+  return vu ? { ht: ht, ttc: ttc } : null;
+}
+
+function centimes(v) { return typeof v === 'number' ? v / 100 : null; }
+
+function avoirsDe(f) {
+  var a = f.avoirsSummary;
+  if (!a || typeof a !== 'object') return 0;
+  var c = centimes(a.totalHTCts);
+  if (c !== null) return c;
+  /* filet : une somme des avoirs détaillés, eux aussi en centimes */
+  if (Array.isArray(a.avoirs) && a.avoirs.length) {
+    var t = 0, vu = false;
+    a.avoirs.forEach(function (x) {
+      var v = centimes(x && x.totalHTCts);
+      if (v !== null) { t += v; vu = true; }
+    });
+    if (vu) return t;
+  }
+  return 0;
+}
+
 function nombreSouple(t) {
   /* « 1 200,50 » est un montant : les espaces fines et la virgule décimale
      ne doivent pas le réduire à 1. */
@@ -985,6 +1035,8 @@ function sommeMontants(v, test) {
 }
 
 function montantHT(f) {
+  var exact = lignesTarifaires(f.priceDetails);
+  if (exact) return exact.ht;
   var ht = sommeMontants(f.priceDetails, estHT);
   if (ht !== null) return ht;
   var ttc = sommeMontants(f.priceDetails, estTTC);
@@ -1008,9 +1060,10 @@ function factureVersGrist(f) {
     date: OF.texte(f.createdAt),
     echeance: OF.texte(f.dateEcheance),
     montant_ht: montantHT(f),
-    montant_ttc: sommeMontants(f.priceDetails, estTTC)
+    montant_ttc: (lignesTarifaires(f.priceDetails) || {}).ttc
+      || sommeMontants(f.priceDetails, estTTC)
       || sommeMontants(f.priceDetails, toujours) || 0,
-    avoirs: sommeMontants(f.avoirsSummary, toujours) || 0,
+    avoirs: avoirsDe(f),
     archive: !!f.archived,
   };
 }
@@ -1022,7 +1075,8 @@ function commanditaireVersGrist(c) {
     entreprise_uid: c.entrepriseUid || '',
     type: OF.texte(c.type),
     nb_apprenants: (c.apprenantUids || []).length,
-    budget: sommeMontants(c.budget, toujours) || 0,
+    budget: (lignesTarifaires(c.budget) || {}).ht
+      || sommeMontants(c.budget, toujours) || 0,
     custom_id: String(c.customId === null || c.customId === undefined ? '' : c.customId),
   };
 }
