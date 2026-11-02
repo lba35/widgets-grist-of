@@ -445,7 +445,40 @@ Un type dont ni les jours disponibles ni les salles détenues ne sont renseigné
 capacité calculable : il est compté à part, sous « Capacité inconnue », plutôt que d'être
 affiché à 0 % comme s'il était vide.
 
-## Le pilotage, en sept sections
+## Le pilotage : une synthèse, et une page par année
+
+Deux questions distinctes, deux écrans. La **Synthèse** répond « où va-t-on ? » sur plusieurs
+années : trajectoire, composition, hypothèses, scénarios, objectifs. Chaque **onglet d'année**
+répond « où en est-on ? » sur une seule, et cela se juge autrement — au rythme écoulé, pas à la
+trajectoire.
+
+### Le rythme attendu, sur l'année utile
+
+L'organisme ne forme pas l'été : son année utile fait dix mois. La page d'année compare donc
+trois taux sur une même échelle — l'**attendu**, le **vendu**, le **facturé** — où l'attendu
+est la part des **jours utiles écoulés**, juillet et août non comptés.
+
+Ce n'est pas un repère systématiquement plus indulgent, c'est un repère juste :
+
+| Au | Année civile | Année utile |
+|---|---:|---:|
+| 30 juin | 49 % | **59 %** |
+| 1er novembre | 83 % | **80 %** |
+
+Au 30 juin, six des dix mois utiles sont faits : juger sur 49 % flatterait le vendu de dix
+points. Au 1er novembre, c'est l'inverse, parce que les deux mois sautés sont déjà derrière.
+Les mois exclus se règlent dans `Parametres`, sous `mois_sans_activite` (par défaut `7,8`).
+
+Deux précautions de lecture sont câblées dans l'écran. L'attendu est dessiné en **trame** et
+non en aplat : c'est un repère, pas une mesure, et une teinte de plus se lirait comme une
+série. Et **seul le vendu est jugé** sur ce repère — le facturé suit le vendu avec un décalage
+normal, l'alarmer sur la même cible ferait passer un délai d'émission pour un retard
+commercial ; il est donc rapporté au vendu, pas au calendrier.
+
+Ce calcul-là est le seul du pilotage à être fait dans le widget et non dans le document : il ne
+lit aucune donnée métier, seulement le calendrier et la date du jour.
+
+## La synthèse, en sept sections
 
 Sept sections, dans l'ordre où l'on raisonne : **La trajectoire** (recettes face aux objectifs,
 résultat, tableau complet), **De quoi elle est faite** (par domaine, puis la rentabilité

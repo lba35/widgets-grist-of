@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=31">
+<link rel="stylesheet" href="commun.css?v=33">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -18,7 +18,7 @@
 <body>
 <div id="app" aria-busy="true">
   <div class="barre">
-    <select class="recherche" id="annee" aria-label="Année pilotée" style="flex:0 0 auto"></select>
+    <div class="onglets" id="onglets" role="tablist"></div>
     <div class="avance" id="avance"></div>
   </div>
   <div class="corps">
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=31"></script>
-<script src="graphes.js?v=31"></script>
+<script src="commun.js?v=33"></script>
+<script src="graphes.js?v=33"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v31';
+var VERSION = 'v33';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -68,6 +68,8 @@ var OBJECTIFS = [
 ];
 
 var idAnnee = null, focusARendre = null;
+/* 'synthese', ou l'identifiant d'une année */
+var vue = 'synthese';
 
 function nom(t, id, defaut) {
   var l = OF.parId(OF.table(t))[id];
@@ -217,6 +219,31 @@ function pageProjection() {
 function bandeauAnnee(zone) {
   var a = OF.parId(OF.table('Annees'))[idAnnee];
   if (!a) return;
+
+  /* La synthèse couvre plusieurs années, mais certaines de ses sections n'en
+     montrent qu'une : ce sélecteur dit laquelle. Les onglets, eux, ouvrent
+     la page détaillée d'une année. */
+  var choix = document.createElement('div');
+  choix.className = 'bloc';
+  choix.style.maxWidth = '220px';
+  choix.style.marginBottom = '14px';
+  var lab = document.createElement('label');
+  lab.textContent = 'Année détaillée dans cette synthèse';
+  lab.htmlFor = 'annee';
+  choix.appendChild(lab);
+  var sel = document.createElement('select');
+  sel.id = 'annee';
+  sel.className = 'champ';
+  sel.style.width = '100%';
+  sel.style.textAlign = 'left';
+  sel.innerHTML = OF.anneesTriees().map(function (x) {
+    return '<option value="' + x.id + '"' + (x.id === idAnnee ? ' selected' : '') + '>'
+      + x.annee + '</option>';
+  }).join('');
+  sel.addEventListener('change', function (ev) { idAnnee = +ev.target.value; rendre(); });
+  choix.appendChild(sel);
+  zone.appendChild(choix);
+
   var t = document.createElement('div');
   t.className = 'tuiles';
 
@@ -1023,6 +1050,292 @@ function grapheDomaines(zone, annees) {
       });
     }
   });
+}
+
+/* ====================================================== la page d'une année */
+/* La synthèse répond « où va-t-on ? » sur plusieurs années. Cette page-ci
+   répond « où en est-on ? » sur une seule, et c'est une autre question :
+   elle se juge au rythme écoulé, pas à la trajectoire. */
+function pageAnnee(a) {
+  var zone = document.createElement('div');
+  var h1 = document.createElement('h1');
+  h1.textContent = 'Année ' + a.annee;
+  zone.appendChild(h1);
+
+  var r = rythme(a.annee);
+  var sous = document.createElement('p');
+  sous.className = 'sous';
+  sous.textContent = r.future
+    ? 'Année à venir : il n\'y a encore rien à réaliser, seulement à projeter.'
+    : (r.revolue
+      ? 'Année révolue : le réalisé est définitif.'
+      : 'Année en cours : ' + r.ecoule + ' jours utiles écoulés sur ' + r.total
+        + ', ' + r.libelleCreux + ' non comptés.');
+  zone.appendChild(sous);
+
+  zone.appendChild(tuilesAnnee(a));
+
+  if (realiseDisponible()) {
+    normaliserAnnee(a);
+    zone.appendChild(section('Où en est l\'année',
+      'Trois taux sur la même échelle : ce que le calendrier laisse attendre, ce qui est '
+      + 'vendu, ce qui est facturé.'));
+    zone.appendChild(tauxAnnee(a, r));
+    grapheAnnee(zone, a);
+    detailFormations(zone, a);
+  } else {
+    zone.appendChild(section('Où en est l\'année', ''));
+    realiseAbsent(zone);
+  }
+  return zone;
+}
+
+function tuilesAnnee(a) {
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  t.appendChild(tuile('Projeté', OF.eur(a.recettes),
+    OF.plur(a.sessions_total, 'session') + ' · ' + OF.plur(a.places, 'place')));
+  if (realiseDisponible()) {
+    normaliserAnnee(a);
+    t.appendChild(tuile('Vendu', OF.eur(a.realise_vendu),
+      OF.plur(a.realise_sessions, 'session') + ' · ' + OF.plur(a.realise_places, 'place')));
+    t.appendChild(tuile('Facturé', OF.eur(a.realise_facture), 'net d\'avoirs'));
+    t.appendChild(tuile('Reste à facturer', OF.eur(a.reste_a_facturer),
+      'vendu non encore émis', (a.reste_a_facturer || 0) > 0 ? 'negatif' : ''));
+  } else {
+    t.appendChild(tuile('Résultat', OF.eur(a.resultat),
+      a.recettes ? OF.pourcent(a.resultat, a.recettes) + ' de marge' : '—'));
+    t.appendChild(tuile('Objectif', OF.eur(a.objectif_ca),
+      a.objectif_ca ? OF.eur((a.recettes || 0) - a.objectif_ca) + ' d\'écart' : 'non fixé'));
+  }
+  return t;
+}
+
+/* Les trois taux, sur une échelle commune. L'attendu est un repère, pas une
+   quatrième barre : il dit où l'on devrait être, pas ce qu'on a fait. */
+function tauxAnnee(a, r) {
+  var base = a.recettes || 0;
+  var zone = document.createElement('div');
+
+  if (!base) {
+    var p = document.createElement('p');
+    p.className = 'alerte-bloc';
+    p.textContent = 'Aucune recette projetée pour ' + a.annee + ' : il n\'y a rien à quoi '
+      + 'rapporter le vendu. Les taux ci-dessous n\'auraient pas de dénominateur.';
+    zone.appendChild(p);
+    return zone;
+  }
+
+  /* Seul le vendu se juge au rythme attendu. Le facturé suit le vendu avec
+     un décalage normal — l'alarmer sur le même repère ferait passer le délai
+     d'émission d'une facture pour un retard commercial. */
+  var taux = [
+    { nom: 'Attendu au ' + new Date().toLocaleDateString('fr-FR'), part: r.part, repere: true,
+      detail: r.future ? 'l\'année n\'a pas commencé'
+        : (r.revolue ? 'année révolue'
+          : r.ecoule + ' jours utiles sur ' + r.total + ', hors ' + r.libelleCreux) },
+    { nom: 'Vendu', part: (a.realise_vendu || 0) / base, juge: true,
+      detail: OF.eur(a.realise_vendu) + ' sur ' + OF.eur(base) + ' projetés' },
+    { nom: 'Facturé', part: (a.realise_facture || 0) / base,
+      detail: OF.eur(a.realise_facture) + ' émis, soit '
+        + (a.realise_vendu ? Math.round(100 * (a.realise_facture || 0) / a.realise_vendu) + ' %'
+           : '—') + ' du vendu' },
+  ];
+
+  var barres = document.createElement('div');
+  barres.className = 'barres';
+  taux.forEach(function (x) {
+    var pc = Math.round(100 * x.part);
+    var l = document.createElement('div');
+    l.className = 'barre-ligne';
+    var cible = Math.round(100 * r.part);
+    var classe = x.repere ? 'repere'
+      : (x.juge && !r.future ? (pc < cible - 10 ? 'grave' : (pc < cible ? 'tendu' : '')) : '');
+    l.innerHTML = '<span>' + OF.echappe(x.nom) + '</span>'
+      + '<span class="jauge"><span class="' + classe + '" style="width:'
+      + Math.min(100, Math.max(0, pc)) + '%"></span></span>'
+      + '<span class="calcul">' + pc + ' %</span>';
+    l.title = x.detail;
+    barres.appendChild(l);
+  });
+  zone.appendChild(barres);
+
+  /* la lecture, en une phrase : c'est l'écart au repère qui se pilote */
+  var ecart = Math.round(100 * ((a.realise_vendu || 0) / base - r.part));
+  var v = document.createElement('p');
+  v.className = 'verdict' + (ecart < -5 ? ' tendu' : '');
+  v.innerHTML = r.future
+    ? 'Année à venir : rien à comparer encore.'
+    : (Math.abs(ecart) <= 5
+      ? 'Le vendu suit le rythme attendu, à ' + Math.abs(ecart) + ' point'
+        + (Math.abs(ecart) > 1 ? 's' : '') + ' près.'
+      : (ecart < 0
+        ? '<b>' + Math.abs(ecart) + ' points de retard</b> sur le rythme attendu, soit '
+          + OF.eur(base * (r.part - (a.realise_vendu || 0) / base)) + ' qui manquent à ce jour.'
+        : '<b>' + ecart + ' points d\'avance</b> sur le rythme attendu, soit '
+          + OF.eur(base * ((a.realise_vendu || 0) / base - r.part)) + ' de mieux que prévu.'));
+  zone.appendChild(v);
+
+  var n = document.createElement('p');
+  n.className = 'aide';
+  n.textContent = 'L\'attendu compte les jours écoulés de l\'année utile — celle qui exclut '
+    + r.libelleCreux + ', où l\'organisme ne forme pas. Au 30 juin, le calendrier civil dirait '
+    + '49 % quand six des dix mois utiles sont faits : juger sur l\'année civile flatterait '
+    + 'le vendu de dix points. Les mois exclus se règlent dans Parametres, sous '
+    + 'mois_sans_activite.';
+  zone.appendChild(n);
+  return zone;
+}
+
+/* Le vendu décomposé, face au projeté. Une seule année : des barres
+   horizontales se lisent mieux que trois piles isolées. */
+function grapheAnnee(zone, a) {
+  var lignes = [
+    { libelle: 'Projeté', valeur: a.recettes || 0 },
+    { libelle: 'Vendu', valeur: a.realise_vendu || 0 },
+    { libelle: 'dont facturé', valeur: a.realise_facture || 0 },
+    { libelle: 'dont à facturer', valeur: (a.reste_a_facturer || 0) },
+  ].filter(function (l) { return l.valeur; });
+  if (lignes.length < 2) return;
+
+  G.figure(zone, {
+    titre: 'Ce que porte ' + a.annee,
+    sous: 'Le vendu se partage entre ce qui est déjà facturé et ce qui reste à émettre.',
+    chiffres: G.chiffres('Les chiffres', ['Mesure', 'Montant', 'Part du projeté'],
+      lignes.map(function (l) {
+        return [l.libelle, OF.eur(l.valeur),
+          a.recettes ? Math.round(100 * l.valeur / a.recettes) + ' %' : '—'];
+      })),
+    dessin: function (larg) {
+      return G.barresHorizontales({
+        larg: larg,
+        valeurs: lignes.map(function (l) {
+          return { libelle: l.libelle, valeur: l.valeur,
+            bulle: '<b>' + OF.echappe(l.libelle) + '</b><span class="second">' + OF.eur(l.valeur)
+              + (a.recettes ? ' · ' + Math.round(100 * l.valeur / a.recettes) + ' % du projeté' : '')
+              + '</span>' };
+        }),
+        formatVal: OF.eur,
+        description: 'Projeté, vendu, facturé et reste à facturer pour ' + a.annee + '.'
+      });
+    }
+  });
+}
+
+/* Le détail par formation : c'est là qu'on voit laquelle décroche. */
+function detailFormations(zone, a) {
+  var T = tableSessions() || 'SmartOF_sessions';
+  var par = {};
+  OF.table(T).forEach(function (s) {
+    if (champDe(s, T, 'annee') !== a.id) return;
+    var f = champDe(s, T, 'formation') || 0;
+    var c = par[f] = par[f] || { formation: f, sessions: 0, places: 0, vendu: 0, facture: 0 };
+    c.sessions++;
+    c.places += champDe(s, T, 'places_vendues') || 0;
+    c.vendu += champDe(s, T, 'vendu') || 0;
+    c.facture += champDe(s, T, 'facture_ht') || 0;
+  });
+  var lignes = Object.keys(par).map(function (k) { return par[k]; });
+  if (!lignes.length) return;
+
+  /* le projeté de chaque formation, pour l'année */
+  var projete = {};
+  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (p) {
+    if (p.annee !== a.id || !p.formation) return;
+    projete[p.formation] = (projete[p.formation] || 0) + (p.recette || 0);
+  });
+
+  lignes.sort(function (x, y) { return y.vendu - x.vendu; });
+
+  zone.appendChild(titre('Formation par formation'));
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Formation</th>'
+    + '<th class="calcule">Sessions</th><th>Places</th>'
+    + '<th>Projeté</th><th>Vendu</th><th>Réalisation</th>'
+    + '<th>Facturé</th><th>Reste à facturer</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  lignes.forEach(function (c) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = c.formation ? nom('Formations', c.formation, 'Formation inconnue')
+      : 'Produit non rapproché';
+    if (!c.formation) {
+      var s2 = document.createElement('div');
+      s2.className = 'second negatif';
+      s2.textContent = 'à rapprocher dans le widget SmartOF';
+      td.appendChild(s2);
+    }
+    tr.appendChild(td);
+    var pr = projete[c.formation] || 0;
+    [[OF.ent(c.sessions), true], [OF.ent(c.places), false],
+     [pr ? OF.eur(pr) : '—', false], [OF.eur(c.vendu), false],
+     [pr ? Math.round(100 * c.vendu / pr) + ' %' : '—', false],
+     [OF.eur(c.facture), false], [OF.eur(c.vendu - c.facture), false]
+    ].forEach(function (x) {
+      var tdc = document.createElement('td');
+      tdc.className = 'calcul' + (x[1] ? ' calcule' : '');
+      tdc.textContent = x[0];
+      tr.appendChild(tdc);
+    });
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(defilant(t));
+}
+
+/* ---------------------------------------------- le rythme d'une année --- */
+/* POURQUOI « AMPUTÉE DE JUILLET ET AOÛT »
+   L'organisme ne forme pas l'été : son année utile fait dix mois, pas douze.
+   Le repère n'en devient pas systématiquement plus indulgent — il devient
+   juste. Au 30 juin, le calendrier civil dit 49 % alors que six des dix mois
+   utiles sont faits, soit 59 % : juger sur 49 % flatte le vendu de dix
+   points. Au 1er novembre, c'est l'inverse — 83 % en civil, 80 % en utile —
+   parce que les deux mois sautés sont déjà derrière.
+
+   Ce calcul est fait ici et non dans le document : il ne lit aucune donnée
+   métier, seulement le calendrier et la date du jour. */
+function moisCreux() {
+  var p = OF.table('Parametres').filter(function (x) {
+    return OF.texte(x.cle) === 'mois_sans_activite';
+  })[0];
+  var brut = p ? (OF.texte(p.texte) || OF.texte(p.valeur)) : '';
+  if (!brut) return [7, 8];                       // juillet, août
+  var l = brut.split(/[^0-9]+/).map(Number).filter(function (m) { return m >= 1 && m <= 12; });
+  return l.length ? l : [7, 8];
+}
+
+var NOMS_MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
+  'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
+/* Jours utiles de l'année, et jours utiles écoulés à une date donnée. On
+   compte en jours et non en mois : un 15 novembre n'est pas un 1er. */
+function rythme(an, aujourdhui) {
+  var creux = moisCreux();
+  var ignore = {};
+  creux.forEach(function (m) { ignore[m] = 1; });
+  var d = aujourdhui || new Date();
+  var total = 0, ecoule = 0;
+  for (var m = 1; m <= 12; m++) {
+    if (ignore[m]) continue;
+    var jours = new Date(Date.UTC(an, m, 0)).getUTCDate();
+    total += jours;
+    var finDuMois = new Date(Date.UTC(an, m, 1));
+    if (d >= finDuMois) ecoule += jours;
+    else {
+      var debutDuMois = new Date(Date.UTC(an, m - 1, 1));
+      if (d > debutDuMois) ecoule += Math.min(jours, Math.floor((d - debutDuMois) / 86400000));
+    }
+  }
+  return {
+    total: total, ecoule: ecoule,
+    part: total ? Math.min(1, ecoule / total) : 0,
+    creux: creux,
+    libelleCreux: creux.map(function (m) { return NOMS_MOIS[m - 1]; }).join(' et '),
+    revolue: d >= new Date(Date.UTC(an + 1, 0, 1)),
+    future: d < new Date(Date.UTC(an, 0, 1)),
+  };
 }
 
 /* ------------------------------------------------- le réalisé SmartOF --- */
@@ -1846,11 +2159,45 @@ function celluleObjectif(annee, obj) {
 }
 
 /* ------------------------------------------------------------- montage -- */
+function rendreOnglets() {
+  var zone = OF.$('onglets');
+  var annees = OF.anneesTriees();
+  var vues = [{ cle: 'synthese', nom: 'Synthèse' }].concat(annees.map(function (a) {
+    return { cle: String(a.id), nom: String(a.annee) };
+  }));
+  var ids = vues.map(function (v) { return v.cle; }).join(',');
+  if (zone.dataset.ids !== ids) {
+    zone.dataset.ids = ids;
+    zone.innerHTML = '';
+    vues.forEach(function (v) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'onglet';
+      b.setAttribute('role', 'tab');
+      b.textContent = v.nom;
+      b.dataset.vue = v.cle;
+      b.addEventListener('click', function () {
+        vue = v.cle;
+        /* l'année regardée devient l'année pilotée de l'écran : les sections
+           qui lisent idAnnee suivent sans qu'on ait deux sélecteurs */
+        if (v.cle !== 'synthese') idAnnee = +v.cle;
+        rendre();
+      });
+      zone.appendChild(b);
+    });
+  }
+  Array.prototype.forEach.call(zone.querySelectorAll('.onglet'), function (b) {
+    b.setAttribute('aria-selected', String(b.dataset.vue === vue));
+  });
+}
+
 function rendre() {
   G.oublier();
+  rendreOnglets();
   var page = OF.$('page');
   page.innerHTML = '';
-  page.appendChild(pageProjection());
+  var a = vue === 'synthese' ? null : OF.parId(OF.table('Annees'))[+vue];
+  page.appendChild(a ? pageAnnee(a) : pageProjection());
   G.redessiner();            // la largeur n'est connue qu'une fois la page posée
   rendreAvance();
   if (focusARendre) {
@@ -1871,7 +2218,8 @@ function rendreAvance() {
     : '<span class="version">' + VERSION + '</span>';
 }
 
-OF.$('annee').addEventListener('change', function (ev) { idAnnee = +ev.target.value; rendre(); });
+/* le bandeau de la synthèse garde son sélecteur d'année : il sert à choisir
+   l'année détaillée dans les sections qui n'en montrent qu'une */
 
 /* La table peut exister sous une autre casse : TABLES ne l'aurait pas
    chargée, et elle paraîtrait vide alors qu'elle est pleine. */
@@ -1886,10 +2234,6 @@ function demarrer() {
   if (!annees.length) { OF.echouer('Aucune année dans la table Annees.'); return; }
   var pilotee = OF.anneePilotee();
   idAnnee = pilotee ? pilotee.id : annees[0].id;
-  OF.$('annee').innerHTML = annees.map(function (a) {
-    return '<option value="' + a.id + '"' + (a.id === idAnnee ? ' selected' : '') + '>'
-      + a.annee + '</option>';
-  }).join('');
   chargerSessionsSmartOF().then(rendre, rendre);
 }
 

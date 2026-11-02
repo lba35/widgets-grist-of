@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=31">
+<link rel="stylesheet" href="commun.css?v=33">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,7 +25,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=31"></script>
+<script src="commun.js?v=33"></script>
 <script>
 /* =========================================================================
    SmartOF → Grist, à la demande.
@@ -60,7 +60,7 @@
    ========================================================================= */
 'use strict';
 
-var VERSION = 'v31';
+var VERSION = 'v33';
 
 var TABLES = ['Parametres', 'Formations', 'Annees',
   'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures'];
@@ -919,13 +919,80 @@ function montant(objet, test, profondeur) {
 
 /* Si le HT n'est pas publié mais que TTC et TVA le sont, il se déduit —
    mieux vaut une soustraction exacte qu'un zéro qui se lira « rien ». */
+/* LA DOCUMENTATION NE DIT NI LE TYPE DE `budget` NI LA FORME DE `priceDetails`
+   Et `budget` n'est même pas filtrable, ce qui trahit un type composé. Il peut
+   donc être un nombre, un objet, ou une liste de lignes de tarif. On accepte
+   les trois plutôt que de parier — et quand rien n'est reconnu, le rapport
+   montre la forme réelle au lieu d'afficher un zéro muet. */
+function toujours() { return true; }
+
+function nombreSouple(t) {
+  /* « 1 200,50 » est un montant : les espaces fines et la virgule décimale
+     ne doivent pas le réduire à 1. */
+  var n = parseFloat(String(t).replace(/[\s\u00a0\u202f]/g, '').replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+
+function ligneMontant(x, test) {
+  if (typeof x === 'number') return x;
+  if (typeof x === 'string') return nombreSouple(x);
+  if (!x || typeof x !== 'object') return null;
+  /* On cherche la quantité AVANT le reste : un prix unitaire pris seul
+     sous-compterait la ligne d'un facteur égal au nombre d'inscrits. */
+  var q = montant(x, function (k) {
+    return /quantit|qty|nombre|^nb|participant|effectif|places?$/i.test(k);
+  }, 0);
+  var pu = montant(x, function (k) {
+    return /prix|price|unitaire|tarif/i.test(k);
+  }, 0);
+  if (pu !== null && q) return pu * q;
+  var direct = montant(x, test, 0);
+  if (direct !== null) return direct;
+  return pu;
+}
+
+function sommeMontants(v, test) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') return nombreSouple(v);
+  if (Array.isArray(v)) {
+    var t = 0, vu = false;
+    v.forEach(function (x) {
+      var m = ligneMontant(x, test || toujours);
+      if (m !== null) { t += m; vu = true; }
+    });
+    return vu ? t : null;
+  }
+  if (typeof v === 'object') {
+    /* Avec un critère précis — HT, TTC, TVA — on vise d'abord le champ
+       nommé : un total publié vaut mieux qu'une somme de lignes recalculée.
+       Sans critère, c'est l'inverse : la somme des lignes vaut mieux que la
+       première valeur numérique rencontrée en descendant. */
+    if (test && test !== toujours) {
+      var vise = montant(v, test, 0);
+      if (vise !== null) return vise;
+    }
+    var cles = Object.keys(v);
+    for (var i = 0; i < cles.length; i++) {
+      if (Array.isArray(v[cles[i]]) && v[cles[i]].length) {
+        var s2 = sommeMontants(v[cles[i]], test);
+        if (s2 !== null) return s2;
+      }
+    }
+    return montant(v, test || toujours, 0);
+  }
+  return null;
+}
+
 function montantHT(f) {
-  var ht = montant(f.priceDetails, estHT);
+  var ht = sommeMontants(f.priceDetails, estHT);
   if (ht !== null) return ht;
-  var ttc = montant(f.priceDetails, estTTC);
-  var tva = montant(f.priceDetails, estTVA);
+  var ttc = sommeMontants(f.priceDetails, estTTC);
+  var tva = sommeMontants(f.priceDetails, estTVA);
   if (ttc !== null && tva !== null) return ttc - tva;
-  return 0;
+  /* aucun nom reconnu : on prend ce qu'on trouve plutôt que rien */
+  var brut = sommeMontants(f.priceDetails, toujours);
+  return brut === null ? 0 : brut;
 }
 
 function factureVersGrist(f) {
@@ -941,8 +1008,9 @@ function factureVersGrist(f) {
     date: OF.texte(f.createdAt),
     echeance: OF.texte(f.dateEcheance),
     montant_ht: montantHT(f),
-    montant_ttc: montant(f.priceDetails, estTTC) || 0,
-    avoirs: montant(f.avoirsSummary, function () { return true; }) || 0,
+    montant_ttc: sommeMontants(f.priceDetails, estTTC)
+      || sommeMontants(f.priceDetails, toujours) || 0,
+    avoirs: sommeMontants(f.avoirsSummary, toujours) || 0,
     archive: !!f.archived,
   };
 }
@@ -954,7 +1022,7 @@ function commanditaireVersGrist(c) {
     entreprise_uid: c.entrepriseUid || '',
     type: OF.texte(c.type),
     nb_apprenants: (c.apprenantUids || []).length,
-    budget: typeof c.budget === 'number' ? c.budget : 0,
+    budget: sommeMontants(c.budget, toujours) || 0,
     custom_id: String(c.customId === null || c.customId === undefined ? '' : c.customId),
   };
 }

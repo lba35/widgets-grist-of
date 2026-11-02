@@ -152,6 +152,57 @@
   }
   console.log('Document : ' + docId);
 
+  /* ============================== 0. les champs dont les formules ont besoin
+     Une formule qui référence un champ sous un nom qu'il n'a pas produit une
+     colonne en erreur, silencieuse jusqu'à ce qu'on ouvre la table. Et Grist
+     refusant deux identifiants qui ne diffèrent que par la casse, un `Annee`
+     déjà présent fait créer `annee2` — que plus aucune formule ne vise. On
+     résout donc chaque nom AVANT d'écrire quoi que ce soit, et on dit ce
+     qu'on n'a pas trouvé. */
+  const REQUIS = {
+    SmartOF_sessions: ['uid', 'date_debut', 'produit_uid', 'archive'],
+    SmartOF_commanditaires: ['session_uid', 'nb_apprenants', 'budget'],
+    SmartOF_factures: ['session_uid', 'montant_ht', 'avoirs', 'archive'],
+    SmartOF_produits: ['produit_uid', 'formation'],
+  };
+
+  function resoudre(liste, attendu) {
+    const exact = liste.find(c => c.id === attendu);
+    if (exact) return exact.id;
+    const bas = attendu.toLowerCase();
+    const proche = liste.find(c => c.id.toLowerCase() === bas);
+    return proche ? proche.id : null;
+  }
+
+  console.log('\n0. Les champs dont les formules ont besoin');
+  const N = {};            // N.Table.champ → identifiant réel
+  const introuvables = [];
+  for (const t of Object.keys(REQUIS)) {
+    const liste = await colonnes(t);
+    N[t] = {};
+    for (const champ of REQUIS[t]) {
+      const vrai = resoudre(liste, champ);
+      N[t][champ] = vrai || champ;
+      if (!vrai) introuvables.push(t + '.' + champ);
+      else if (vrai !== champ) console.log(`    [renommé]  ${t}.${champ} → ${vrai}`);
+    }
+  }
+  if (introuvables.length) {
+    refuser('Champs introuvables : ' + introuvables.join(', '), [
+      'Les formules qui les référencent produiraient des colonnes en erreur.',
+      'Ces champs sont écrits par le widget SmartOF : lancez un rafraîchissement',
+      "complet avant ce script, et vérifiez qu'aucune colonne n'a été renommée",
+      'au niveau de son IDENTIFIANT (le libellé, lui, peut changer librement).',
+      '',
+      'Rien n\'a été écrit.',
+    ]);
+    return;
+  }
+  console.log('    tous les champs référencés existent');
+
+  /* raccourcis : S.uid, C.budget, FA.montant_ht… portent le nom RÉEL */
+  const S = N.SmartOF_sessions, C = N.SmartOF_commanditaires, FA = N.SmartOF_factures;
+
   /* ========================================= 1. l'année et la formation */
   console.log('\n1. SmartOF_sessions — année et formation');
 
@@ -185,7 +236,7 @@
      dont la colonne a été créée : on accepte les deux plutôt que d'imposer. */
   const ANNEE_DE = [
     'import datetime',
-    'd = $date_debut',
+    `d = $${S.date_debut}`,
     'an = 0',
     'if hasattr(d, "year"):',
     '  an = d.year',
@@ -216,10 +267,10 @@
 
   if (!existaitFormation) {
     await poser('SmartOF_sessions', COL_FORMATION, F('Formation', [
-      'if not $produit_uid:',
+      `if not $${S.produit_uid}:`,
       '  return None',
-      'p = SmartOF_produits.lookupOne(produit_uid=$produit_uid)',
-      'return (p.formation or None) if p else None',
+      `p = SmartOF_produits.lookupOne(${N.SmartOF_produits.produit_uid}=$${S.produit_uid})`,
+      `return (p.${N.SmartOF_produits.formation} or None) if p else None`,
     ], 'Ref:Formations'));
   } else {
     console.log(`    [conservée] SmartOF_sessions.${COL_FORMATION}`);
@@ -228,37 +279,37 @@
   /* --------------------------------- 2. ce que porte chaque session */
   console.log('\n2. SmartOF_sessions — places, vendu, facturé');
 
-  const COMMANDITAIRES = 'SmartOF_commanditaires.lookupRecords(session_uid=$uid)';
-  const FACTURES = 'SmartOF_factures.lookupRecords(session_uid=$uid)';
+  const COMMANDITAIRES = `SmartOF_commanditaires.lookupRecords(${C.session_uid}=$${S.uid})`;
+  const FACTURES = `SmartOF_factures.lookupRecords(${FA.session_uid}=$${S.uid})`;
 
   await poser('SmartOF_sessions', 'places_vendues', F('Places vendues',
-    `sum(c.nb_apprenants or 0 for c in ${COMMANDITAIRES})`));
+    `sum(c.${C.nb_apprenants} or 0 for c in ${COMMANDITAIRES})`));
   await poser('SmartOF_sessions', 'vendu', F('Vendu',
-    `sum(c.budget or 0 for c in ${COMMANDITAIRES})`));
+    `sum(c.${C.budget} or 0 for c in ${COMMANDITAIRES})`));
   await poser('SmartOF_sessions', 'facture_ht', F('Facturé HT, net d\'avoirs',
-    `sum((f.montant_ht or 0) - (f.avoirs or 0) for f in ${FACTURES} if not f.archive)`));
+    `sum((f.${FA.montant_ht} or 0) - (f.${FA.avoirs} or 0) for f in ${FACTURES} if not f.${FA.archive})`));
   await poser('SmartOF_sessions', 'reste_a_facturer', F('Reste à facturer',
     'return ($vendu or 0) - ($facture_ht or 0)'));
 
   /* -------------------- 3. les deux autres tables suivent leur session */
   console.log('\n3. Commanditaires et factures — année et formation de leur session');
 
-  const DE_LA_SESSION = [
-    'if not $session_uid:',
+  const DE_LA_SESSION = (t) => [
+    `if not $${N[t].session_uid}:`,
     '  return None',
-    's = SmartOF_sessions.lookupOne(uid=$session_uid)',
+    `s = SmartOF_sessions.lookupOne(${S.uid}=$${N[t].session_uid})`,
   ];
   for (const t of ['SmartOF_commanditaires', 'SmartOF_factures']) {
     const cols = await colonnes(t);
     const ca = resoudre(cols, 'annee') || 'annee';
     const cf = resoudre(cols, 'formation') || 'formation';
     await poser(t, ca, F('Année',
-      [...DE_LA_SESSION, `return (s.${COL_ANNEE} or None) if s else None`], 'Ref:Annees'));
+      [...DE_LA_SESSION(t), `return (s.${COL_ANNEE} or None) if s else None`], 'Ref:Annees'));
     await poser(t, cf, F('Formation',
-      [...DE_LA_SESSION, `return (s.${COL_FORMATION} or None) if s else None`], 'Ref:Formations'));
+      [...DE_LA_SESSION(t), `return (s.${COL_FORMATION} or None) if s else None`], 'Ref:Formations'));
   }
   await poser('SmartOF_factures', 'net_ht', F('Net HT, après avoirs',
-    'return ($montant_ht or 0) - ($avoirs or 0)'));
+    `return ($${FA.montant_ht} or 0) - ($${FA.avoirs} or 0)`));
 
   /* ====================================== 4. les totaux de chaque année */
   console.log("\n4. Annees — le réalisé, et son écart au projeté");
@@ -266,13 +317,13 @@
   const SESSIONS_ANNEE = `SmartOF_sessions.lookupRecords(${COL_ANNEE}=$id)`;
 
   await poser('Annees', 'realise_sessions', F('Sessions réalisées',
-    `len([s for s in ${SESSIONS_ANNEE} if not s.archive])`, 'Int'));
+    `len([s for s in ${SESSIONS_ANNEE} if not s.${S.archive}])`, 'Int'));
   await poser('Annees', 'realise_places', F('Places vendues (réalisé)',
-    `sum(s.places_vendues or 0 for s in ${SESSIONS_ANNEE} if not s.archive)`));
+    `sum(s.places_vendues or 0 for s in ${SESSIONS_ANNEE} if not s.${S.archive})`));
   await poser('Annees', 'realise_vendu', F('Vendu (réalisé)',
-    `sum(s.vendu or 0 for s in ${SESSIONS_ANNEE} if not s.archive)`));
+    `sum(s.vendu or 0 for s in ${SESSIONS_ANNEE} if not s.${S.archive})`));
   await poser('Annees', 'realise_facture', F('Facturé HT (réalisé)',
-    `sum(s.facture_ht or 0 for s in ${SESSIONS_ANNEE} if not s.archive)`));
+    `sum(s.facture_ht or 0 for s in ${SESSIONS_ANNEE} if not s.${S.archive})`));
   await poser('Annees', 'reste_a_facturer', F('Reste à facturer',
     'return ($realise_vendu or 0) - ($realise_facture or 0)'));
 
@@ -296,7 +347,7 @@
     'A = next((a for a in Annees.all if a.annee_pilotee), None)',
     'if not A:',
     '  return 0',
-    `S = [s for s in SmartOF_sessions.lookupRecords(${COL_FORMATION}=$id, ${COL_ANNEE}=A.id) if not s.archive]`,
+    `S = [s for s in SmartOF_sessions.lookupRecords(${COL_FORMATION}=$id, ${COL_ANNEE}=A.id) if not s.${S.archive}]`,
   ];
 
   await poser('Formations', 'realise_sessions_annee', F('Sessions réalisées (année pilotée)',
