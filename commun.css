@@ -497,3 +497,12 @@ button.lien:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
   background: none; border: 0; border-bottom: 1px dotted currentColor; cursor: pointer; }
 .lien-annee:hover { border-bottom-style: solid; }
 .lien-annee:focus-visible { outline: none; box-shadow: var(--ombre-focus); border-radius: 2px; }
+
+/* La barre de rafraîchissement SmartOF, dans le pilotage. */
+.barre-synchro { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 12px; margin: 14px 0 0; background: var(--surface);
+  border: 1px solid var(--trait); font-size: 13px; }
+.barre-synchro .champ { width: auto; min-width: 180px; text-align: left; }
+.barre-synchro .etat-synchro { min-width: 0; flex: 1 1 160px; }
+.rapport-synchro { margin-top: 10px; }
+.rapport-synchro p { margin: 6px 0; }

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=37">
+<link rel="stylesheet" href="commun.css?v=38">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=37"></script>
-<script src="graphes.js?v=37"></script>
+<script src="commun.js?v=38"></script>
+<script src="graphes.js?v=38"></script>
+<script src="smartof_sync.js?v=38"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v37';
+var VERSION = 'v38';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -96,6 +97,38 @@ function objectifsTenus() {
 
 /* L'horizon affiché : toutes les années déclarées, fenêtrées à huit pour que
    les graphiques restent lisibles. */
+/* UNE ANNÉE QUI NE PORTE RIEN N'EST PAS UNE ANNÉE À MONTRER
+   Le plan commence en 2027 ; 2026 n'a qu'un objectif, aucune projection
+   détaillée. Piloter la synthèse sur 2026 mettait donc des zéros partout —
+   tuiles, graphiques, tableaux — alors que le document, lui, est plein. Un
+   écran vide se lit comme une panne, pas comme « cette année-là est vide ». */
+/* Deux degrés, et la distinction compte : une année qui n'a qu'un objectif
+   est aussi vide qu'une année nue pour tout ce que la synthèse dessine —
+   l'objectif est une ligne de repère, pas une donnée à répartir. 2026 avait
+   un objectif de 1 715 696 € et rien d'autre : s'y caler mettait des zéros
+   dans chaque tuile et chaque graphique. */
+function porteDesDonnees(a) {
+  if (!a) return false;
+  return !!(a.recettes || a.sessions_total || a.places
+    || (realiseDisponible() && realiseDe(a).vendu));
+}
+function porteQuelqueChose(a) {
+  return !!a && (porteDesDonnees(a) || !!a.objectif_ca);
+}
+
+/* L'année sur laquelle la synthèse se cale par défaut : celle qui est
+   déclarée pilotée si elle porte quelque chose, sinon la première qui en
+   porte. On ne choisit jamais une année vide quand il en existe une pleine. */
+function anneeDeDepart() {
+  var annees = OF.anneesTriees();
+  if (!annees.length) return null;
+  var pilotee = OF.anneePilotee();
+  if (porteDesDonnees(pilotee)) return pilotee;
+  return annees.filter(porteDesDonnees)[0]
+    || annees.filter(porteQuelqueChose)[0]
+    || pilotee || annees[0];
+}
+
 function anneesAffichees() {
   var toutes = OF.anneesTriees();
   if (toutes.length <= 8) return toutes;
@@ -114,6 +147,29 @@ function tuile(libelle, valeur, contexte, classe) {
     + '<div class="tuile-ctx">' + (contexte || '') + '</div>';
   return d;
 }
+/* UN GRAPHIQUE SANS CHIFFRE N'EST PAS UN GRAPHIQUE
+   Des axes, une légende, et rien dedans : le lecteur cherche la panne au lieu
+   de lire qu'il n'y a pas encore de données. Une phrase qui dit ce qui
+   remplirait la figure vaut mieux qu'un cadre vide — et dit où aller.
+
+   `valeurs` est la liste des nombres que la figure dessinerait. S'ils sont
+   tous nuls ou absents, on écrit la phrase à la place. */
+function desChiffres(valeurs) {
+  return (valeurs || []).some(function (v) {
+    return typeof v === 'number' ? v !== 0 : !!v;
+  });
+}
+function rienADessiner(zone, titreFigure, remplirAvec) {
+  var t = document.createElement('p');
+  t.className = 'figure-titre';
+  t.textContent = titreFigure;
+  zone.appendChild(t);
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.innerHTML = 'Rien à dessiner pour l\'instant. ' + remplirAvec;
+  zone.appendChild(p);
+}
+
 /* Un intertitre de section : l'écran est long, il lui faut une colonne
    vertébrale visible plutôt qu'une suite de blocs de même poids. */
 function section(t, sous) {
@@ -245,6 +301,24 @@ function bandeauAnnee(zone) {
   sel.addEventListener('change', function (ev) { idAnnee = +ev.target.value; rendre(); });
   choix.appendChild(sel);
   zone.appendChild(choix);
+
+  /* Si le document désigne une année pilotée et qu'on n'a pas pu s'y tenir,
+     on le dit : un écran qui choisit autre chose sans l'annoncer passe pour
+     un écran qui se trompe. */
+  var pilotee = OF.anneePilotee();
+  if (pilotee && pilotee.id !== a.id && !porteDesDonnees(pilotee)) {
+    var pq = document.createElement('p');
+    pq.className = 'note';
+    pq.style.marginTop = '-6px';
+    pq.innerHTML = 'Le document désigne <b>' + pilotee.annee + '</b> comme année pilotée, '
+      + 'mais elle n\'a encore ni session ni recette projetée : la synthèse se cale donc sur '
+      + '<b>' + a.annee + '</b>, pour ne pas afficher des zéros partout. '
+      + (pilotee.objectif_ca
+        ? 'L\'objectif de ' + pilotee.annee + ' reste comparé dans « Ce que l\'on vise », et '
+          + 'son onglet montre le détail.'
+        : 'Son onglet reste accessible en haut.');
+    zone.appendChild(pq);
+  }
 
   var t = document.createElement('div');
   t.className = 'tuiles';
@@ -903,6 +977,13 @@ function rentabilite(zone) {
 
 function grapheRecettes(zone, annees) {
   var avecObjectif = annees.some(function (a) { return a.objectif_ca; });
+  if (!desChiffres(annees.map(function (a) { return a.recettes; })) && !avecObjectif) {
+    rienADessiner(zone, 'Recettes projetées par année',
+      'Aucune année n\'a de recette projetée ni d\'objectif. Les recettes viennent des '
+      + 'sessions et des places saisies dans la <b>fiche formation</b> ; l\'objectif se pose '
+      + 'dans l\'onglet de son année.');
+    return;
+  }
   var valeurs = annees.map(function (a) {
     var ecart = a.objectif_ca ? (a.recettes || 0) - a.objectif_ca : null;
     return {
@@ -946,6 +1027,13 @@ function grapheRecettes(zone, annees) {
 }
 
 function grapheResultat(zone, annees) {
+  if (!desChiffres(annees.map(function (a) { return a.resultat; }))
+      && !desChiffres(annees.map(function (a) { return a.recettes; }))) {
+    rienADessiner(zone, 'Résultat sur coûts directs, par année',
+      'Le résultat se calcule à partir des recettes et des coûts des sessions projetées : '
+      + 'tant qu\'aucune session n\'est projetée, il n\'y a rien à comparer.');
+    return;
+  }
   var valeurs = annees.map(function (a) {
     return {
       libelle: String(a.annee),
@@ -993,7 +1081,12 @@ function grapheDomaines(zone, annees) {
     return annees.reduce(function (n, a) { return n + (parDomaine[k][a.id] || 0); }, 0);
   };
   cles = cles.filter(totalDe);
-  if (!cles.length) return;
+  if (!cles.length) {
+    rienADessiner(zone, 'Recettes par domaine, année par année',
+      'Aucune recette n\'est encore projetée sur les années affichées. La répartition par '
+      + 'domaine se remplira d\'elle-même dès que des sessions seront projetées.');
+    return;
+  }
   cles.sort(function (x, y) { return totalDe(y) - totalDe(x); });
 
   /* Au-delà de cinq teintes, on ne distingue plus : les plus petits domaines
@@ -1112,6 +1205,7 @@ function pageAnnee(a) {
     zone.appendChild(section('Qui porte, qui décroche',
       'Le vendu face au projeté, formation par formation.'));
     detailFormations(zone, a);
+    barreRafraichir(zone);
   } else {
     realiseAbsent(zone);
   }
@@ -1732,6 +1826,133 @@ function couverture() {
     sessions: OF.table(T).length };
 }
 
+/* RAFRAÎCHIR SANS CHANGER D'ÉCRAN
+   Le réalisé se regarde ici ; aller le chercher ailleurs casse le geste. Le
+   moteur est celui du widget SmartOF — le même fichier, pas une copie : deux
+   implémentations auraient divergé au premier correctif d'API.
+
+   Deux portées, et le choix n'est pas cosmétique. « Depuis la dernière
+   reprise » est rapide mais ne voit que ce que l'API déclare modifié ;
+   « tout reprendre » est long mais ne peut rien oublier. Quand il y a un
+   doute, c'est la seconde qui tranche — d'où sa présence, et sa mention. */
+function barreRafraichir(zone) {
+  var SY = window.SmartOFSync;
+  if (!SY) return;
+
+  var bloc = document.createElement('div');
+  bloc.className = 'barre-synchro';
+
+  var quand = OF.texte(SY.reglage(SY.CLE_DERNIER));
+  if (!quand) {
+    /* la date lisible peut manquer alors que la date technique est là :
+       mieux vaut une date brute que « aucune reprise » sous un bouton qui
+       propose justement de repartir de la dernière */
+    var iso = OF.texte(SY.reglage(SY.CLE_DERNIER_ISO));
+    if (iso) {
+      var d = new Date(Date.parse(iso));
+      if (!isNaN(d.getTime())) quand = d.toLocaleDateString('fr-FR');
+    }
+  }
+  var info = document.createElement('span');
+  info.className = 'second';
+  info.textContent = quand ? 'Dernière reprise : ' + quand : 'Aucune reprise enregistrée';
+  bloc.appendChild(info);
+
+  if (!SY.configure()) {
+    var q = document.createElement('span');
+    q.className = 'second';
+    q.textContent = '— l\'adresse et la clé se renseignent dans le widget SmartOF.';
+    bloc.appendChild(q);
+    zone.appendChild(bloc);
+    return;
+  }
+
+  var incr = SY.repriseIncrementalePossible();
+  var sel = document.createElement('select');
+  sel.className = 'champ';
+  sel.setAttribute('aria-label', 'Portée du rafraîchissement');
+  SY.FENETRES.forEach(function (f) {
+    if (f.cle === 'depuis' && !incr) return;
+    var o = document.createElement('option');
+    o.value = f.cle;
+    o.textContent = f.cle === 'tout' ? 'Tout reprendre (rien ne peut être oublié)' : f.libelle;
+    sel.appendChild(o);
+  });
+  sel.value = incr ? 'depuis' : 'tout';
+  bloc.appendChild(sel);
+
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Rafraîchir depuis SmartOF';
+  bloc.appendChild(b);
+
+  var etat = document.createElement('span');
+  etat.className = 'second etat-synchro';
+  etat.setAttribute('role', 'status');
+  bloc.appendChild(etat);
+  zone.appendChild(bloc);
+  if (DERNIERE_SYNCHRO) rapportSynchro(zone, DERNIERE_SYNCHRO);
+
+  b.addEventListener('click', function () {
+    b.disabled = true; sel.disabled = true;
+    etat.textContent = 'Démarrage…';
+    SY.rafraichir({ fenetre: sel.value, dire: function (t) { etat.textContent = t; } })
+      .then(function (bilan) {
+        b.disabled = false; sel.disabled = false;
+        /* le rapport est gardé et redessiné avec l'écran : l'insérer ici
+           l'aurait fait disparaître au rendu qui suit */
+        DERNIERE_SYNCHRO = bilan;
+        /* le document a changé sous l'écran : on le relit avant de redessiner */
+        return OF.charger(RELIRE_SYNCHRO).catch(function () { return null; });
+      })
+      .then(function () { REALISE_CACHE = null; rendre(); })
+      .catch(function (e) {
+        b.disabled = false; sel.disabled = false;
+        etat.textContent = '';
+        OF.signaler(e.message, true);
+      });
+  });
+}
+
+var RELIRE_SYNCHRO = ['Annees', 'SmartOF_sessions', 'SmartOF_produits',
+  'SmartOF_commanditaires', 'SmartOF_factures', 'Parametres'];
+/* le bilan de la dernière reprise de cette session d'écran */
+var DERNIERE_SYNCHRO = null;
+function dateFr(iso) {
+  var d = new Date(Date.parse(iso));
+  return isNaN(d.getTime()) ? iso : d.toLocaleDateString('fr-FR');
+}
+
+/* Ce que la reprise a fait — en clair, et les avertissements en entier :
+   une reprise qui a laissé des produits non rapprochés doit le dire ici,
+   sinon on ira chercher les montants manquants ailleurs. */
+function rapportSynchro(zone, bilan) {
+  var d = document.createElement('div');
+  d.className = 'rapport-synchro';
+  var p = document.createElement('p');
+  p.className = bilan.erreur ? 'alerte-bloc' : 'note';
+  if (bilan.erreur) {
+    p.innerHTML = '<b>Reprise interrompue</b> — ' + OF.echappe(bilan.erreur);
+  } else {
+    p.innerHTML = '<b>' + OF.plur(bilan.lues, 'ligne') + '</b> ' +
+      OF.accord(bilan.lues, 'lue', 'lues') + ' chez SmartOF : '
+      + OF.plur(bilan.ajoutees, 'ajoutée') + ', ' + OF.plur(bilan.corrigees, 'corrigée')
+      + ', ' + bilan.inchangees + ' inchangées.'
+      + (bilan.borne
+        ? ' Modifications depuis le ' + OF.echappe(dateFr(bilan.borne)) + '.'
+        : ' Reprise complète, sans filtre de date.');
+  }
+  d.appendChild(p);
+  (bilan.avertissements || []).forEach(function (a) {
+    var w = document.createElement('p');
+    w.className = 'note';
+    w.textContent = a;
+    d.appendChild(w);
+  });
+  zone.appendChild(d);
+}
+
 /* Les colonnes fautives, dites partout où on lit leurs valeurs — synthèse
    comme onglet d'année. Un zéro faux ne se voit pas ; il faut l'annoncer là
    où il s'affiche, pas seulement sur l'écran d'à côté. */
@@ -1759,6 +1980,7 @@ function alerteErreurs(zone) {
 }
 
 function realiseSection(zone, annees) {
+  barreRafraichir(zone);
   if (!realiseDisponible()) { realiseAbsent(zone); return; }
   var a = OF.parId(OF.table('Annees'))[idAnnee];
   if (!a) return;
@@ -2240,7 +2462,12 @@ function perimetreTableau(zone, a) {
    que personne ne s'est encore vu attribuer. Ce n'est pas la même chose, et
    l'écran ne doit pas les confondre. */
 function grapheAffectation(zone, annees) {
-  if (!annees.some(function (a) { return a.remplissage_inter; })) return;
+  if (!annees.some(function (a) { return a.remplissage_inter; })) {
+    rienADessiner(zone, 'Part des places déjà affectée, par année',
+      'Aucune place n\'est encore affectée à un segment. L\'affectation se fait par la '
+      + '<b>fiche formation</b>, dans les projections de chaque année.');
+    return;
+  }
   var valeurs = annees.map(function (a) {
     var pc = a.remplissage_inter ? Math.round(100 * a.remplissage_inter) : null;
     return {
@@ -2725,9 +2952,16 @@ function chargerSessionsSmartOF() {
 function demarrer() {
   var annees = OF.anneesTriees();
   if (!annees.length) { OF.echouer('Aucune année dans la table Annees.'); return; }
-  var pilotee = OF.anneePilotee();
-  idAnnee = pilotee ? pilotee.id : annees[0].id;
-  chargerSessionsSmartOF().then(rendre, rendre);
+  /* les sessions d'abord : le choix de l'année de départ en dépend */
+  chargerSessionsSmartOF().then(function () {
+    var d = anneeDeDepart();
+    idAnnee = d ? d.id : annees[0].id;
+    rendre();
+  }, function () {
+    var d = anneeDeDepart();
+    idAnnee = d ? d.id : annees[0].id;
+    rendre();
+  });
 }
 
 if (typeof window.TEST_SANS_DEMARRAGE === 'undefined') OF.initialiser(TABLES, demarrer);

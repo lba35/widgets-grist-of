@@ -10,6 +10,7 @@ dans Grist.
 | `fiche.html` | Tout ce qui concerne une formation : définition, public, ressources, coût, projections, ventes intra, validation |
 | `charge.html` | Les moyens à réunir, en trois volets : vivier d'intervenants, recrutement, occupation des salles |
 | `pilotage.html` | La trajectoire commerciale pluriannuelle : recettes, résultat, hypothèses, scénarios, objectifs |
+| `smartof_sync.js` | Le moteur de reprise SmartOF, sans écran — partagé par le widget SmartOF et le pilotage |
 | `smartof.html` | La reprise du réalisé depuis l'API SmartOF, à la demande, sans CSV |
 | `commun.css` | Jetons visuels et composants partagés |
 | `commun.js` | Plomberie Grist, métadonnées de colonnes, éditeurs, écriture différée |
@@ -549,6 +550,46 @@ le taux. Sans cette soustraction, l'hypothèse haute revendrait des places déj�
 Deux garde-fous : le total recalculé est confronté à la recette du document, et l'écart est
 signalé — une fourchette assise sur une assiette incomplète ne vaut rien ; et si le remplissage
 projeté tombe hors de la fourchette, l'écran le dit, car elle n'encadre alors plus rien.
+
+## Rafraîchir SmartOF depuis le pilotage
+
+Le réalisé se regarde dans le pilotage ; aller le chercher dans un autre widget casse le geste.
+Une barre, en bas de la section « Ce qui s'est vraiment vendu » et de l'onglet de chaque année,
+porte la date de la dernière reprise, le choix de la portée et le bouton.
+
+Le moteur est **le même fichier** que celui du widget SmartOF — `smartof_sync.js`, sans écran,
+chargé par les deux. Deux implémentations auraient divergé au premier correctif d'API ; c'est
+d'ailleurs pour cela que l'extraction valait la peine d'être faite avant d'ajouter le bouton.
+
+Deux portées, et le choix n'est pas cosmétique :
+
+| Portée | Ce qu'elle fait | Quand |
+|---|---|---|
+| **Depuis la dernière reprise** | filtre sur `filter[updatedAt][gte]`, **la veille comprise** | le geste courant |
+| **Tout reprendre** | aucun filtre de date | au moindre doute |
+
+La veille est comprise à dessein : une session modifiée pendant la reprise précédente serait
+sinon manquée pour toujours. Et s'il n'y a pas encore de reprise enregistrée, l'incrémental
+n'est pas proposé — une reprise incomplète qui se croit complète est pire qu'une reprise
+longue. La date technique est stockée en ISO (`smartof_dernier_iso`) à côté de la date lisible :
+reformater « 02/11/2026 à 23:45 » à l'envers aurait été une source de pannes.
+
+Le bilan reste affiché après le redessin : lignes lues, ajoutées, corrigées, inchangées, et les
+avertissements en entier — un produit non rapproché doit se dire là, sinon on ira chercher les
+montants manquants ailleurs.
+
+## Pas de graphique vide, et pas d'année vide par défaut
+
+Des axes, une légende, et rien dedans : le lecteur cherche la panne au lieu de lire qu'il n'y a
+pas encore de données. Chaque figure de la synthèse teste ses chiffres et, s'ils sont tous nuls,
+écrit à la place **une phrase qui dit ce qui la remplirait** et où aller le saisir.
+
+Le cas le plus coûteux était en amont. La synthèse se calait sur l'année déclarée pilotée dans
+le document — 2026, qui n'a qu'un objectif de 1 715 696 € et aucune projection, le plan
+commençant en 2027. Résultat : des zéros dans chaque tuile et chaque graphique, alors que le
+document est plein. La synthèse se cale désormais sur **une année qui porte des données**, et
+le dit en une ligne quand elle s'écarte de l'année pilotée. Un objectif seul ne compte pas comme
+une donnée : c'est une ligne de repère, pas une matière à répartir.
 
 ## Les objectifs : saisis dans l'onglet de leur année
 
