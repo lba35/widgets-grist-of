@@ -448,9 +448,30 @@ affiché à 0 % comme s'il était vide.
 ## Le pilotage : une synthèse, et une page par année
 
 Deux questions distinctes, deux écrans. La **Synthèse** répond « où va-t-on ? » sur plusieurs
-années : trajectoire, composition, hypothèses, scénarios, objectifs. Chaque **onglet d'année**
-répond « où en est-on ? » sur une seule, et cela se juge autrement — au rythme écoulé, pas à la
-trajectoire.
+années : trajectoire, composition, hypothèses, scénarios, lecture d'ensemble des objectifs.
+Chaque **onglet d'année** répond « où en est-on ? » sur une seule, et cela se juge autrement —
+au rythme écoulé, pas à la trajectoire.
+
+### L'onglet d'une année, dans l'ordre où l'on se pose les questions
+
+Quatre sections, et cet ordre n'est pas décoratif :
+
+1. **Visé, projeté, vendu, facturé** — les quatre montants sur une même échelle, l'objectif
+   dessiné en **trait pointillé** et non en cinquième barre : c'est un seuil à franchir, pas
+   un résultat de plus à comparer. La table de chiffres sous la figure donne deux
+   pourcentages distincts, *part de l'objectif* et *part du projeté*, parce que ce sont deux
+   questions différentes — tenir sa promesse, et tenir son plan. Une année peut faire l'un
+   sans l'autre.
+2. **Est-ce qu'on est à l'heure** — les trois taux au rythme de l'année utile (ci-dessous).
+3. **Qui porte, qui décroche** — le détail formation par formation.
+4. **Les objectifs de l'année** — la saisie, à côté de ce qu'elle juge.
+
+Le reste à facturer est annoncé pour ce qu'il est : **un délai d'émission, pas un manque de
+ventes**. Sans cette phrase il se lit comme une perte.
+
+Une année future qui porte déjà du vendu ne s'annonce plus « rien à réaliser » : les sessions
+se commandent à l'avance, et affirmer le contraire devant 481 846 € déjà engagés
+décrédibiliserait le reste de la page.
 
 ### Le rythme attendu, sur l'année utile
 
@@ -485,8 +506,9 @@ résultat, tableau complet), **De quoi elle est faite** (par domaine, puis la re
 formation par formation), **Ce qui s'est vraiment vendu** (le réalisé SmartOF face au projeté),
 **Pour qui** (ce que portent les formations vendues à l'extérieur,
 et ce que portent celles qui ne servent que le CHU), **Ce qui peut encore bouger** (part des
-places déjà affectée, puis les hypothèses), **Scénarios**, **Ce que l'on vise** (les
-objectifs).
+places déjà affectée, puis les hypothèses), **Scénarios**, **Ce que l'on vise** (objectif,
+projeté, vendu et facturé côte à côte, toutes années — en lecture seule, l'année étant un
+lien vers son onglet).
 
 Le taux que le document appelle `remplissage_inter` est affiché comme ce qu'il est : la **part
 des places ouvertes déjà affectée** à un segment. Les places étant attribuées comme si tout se
@@ -528,13 +550,37 @@ Deux garde-fous : le total recalculé est confronté à la recette du document, 
 signalé — une fourchette assise sur une assiette incomplète ne vaut rien ; et si le remplissage
 projeté tombe hors de la fourchette, l'écran le dit, car elle n'encadre alors plus rien.
 
-## Les objectifs
+## Les objectifs : saisis dans l'onglet de leur année
 
 Un objectif ne se calcule pas, il se décide : c'est la seule chose que le pilotage écrit, dans
 la table `Annees`, à côté du réalisé qui lui fait face. Quatre objectifs sont prévus — recettes,
 résultat, sessions, heures stagiaires — et chacun n'apparaît que si la colonne de réalisé
 correspondante existe. Si la colonne d'objectif manque, un bouton la crée dans le document,
 en numérique, avec son libellé.
+
+**La saisie vit dans l'onglet de chaque année.** Elle se faisait auparavant dans un tableau de
+la synthèse, toutes années mêlées : pour remplir une case il fallait trouver sa ligne parmi
+huit, et l'objectif se saisissait loin du réalisé qu'il juge. La synthèse garde ce qu'elle fait
+mieux — les mettre toutes côte à côte, en lecture — et l'onglet porte la main.
+
+## Pourquoi le total par année se fait dans le widget
+
+C'est la seule entorse assumée à la règle « rien n'est recalculé ici », et elle a une cause
+précise. Les colonnes d'agrégat de `Annees` (`realise_vendu` et compagnie) **répondaient zéro**
+alors que les colonnes de session, elles, calculaient juste : le même écran affichait
+« 0 € vendu » en tuile et 481 846 € dans le tableau trois centimètres plus bas. Une formule
+d'agrégat qui ne remonte rien est **indétectable à l'œil** — elle rend un zéro, pas une erreur.
+
+Additionner dans le widget les valeurs que le document a calculées session par session n'est
+pas recalculer : les montants, l'année et la formation viennent tous du document, et c'est déjà
+ce que faisait le tableau « formation par formation » depuis le début. On ne fait que
+**grouper**. Le pilotage n'exige donc plus aucune colonne d'agrégat dans `Annees` ; il lui faut
+seulement que chaque session sache son année et son montant.
+
+Une cellule en erreur, elle, ne vaut pas zéro : Grist la renvoie sous la forme
+`['E', 'TypeDErreur', …]`, le widget la reconnaît, et **l'annonce sur les deux écrans** — la
+synthèse comme l'onglet d'année. Un zéro faux ne se voit pas ; il faut le dire là où il
+s'affiche, pas seulement sur l'écran d'à côté.
 
 ## L'état d'une fiche
 

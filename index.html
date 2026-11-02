@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=35">
+<link rel="stylesheet" href="commun.css?v=36">
 <style>
   body { overflow-y: auto; }
   .enveloppe { max-width: 74ch; margin: 0 auto; padding: 48px 24px 72px; }
@@ -59,12 +59,15 @@
     </a>
     <a class="carte" href="pilotage.html">
       <h2>Pilotage</h2>
-      <p>La trajectoire commerciale, en six temps : les recettes face aux objectifs et le
-        résultat ; de quoi elles sont faites, par domaine et par formation rentable ou non ;
-        <strong>pour qui</strong> — ce que portent les formations vendues à l'extérieur face à
-        celles qui ne servent que le CHU ; ce qui peut encore bouger — la part déjà ferme, la
-        part à vendre, et une hypothèse basse et haute à paramétrer ; des scénarios à essayer
-        sans rien ressaisir ; et les objectifs à fixer, année par année.</p>
+      <p>Une <strong>synthèse</strong> pluriannuelle et un <strong>onglet par année</strong>.
+        La synthèse : les recettes face aux objectifs et le résultat ; de quoi elles sont
+        faites, par domaine et par formation rentable ou non ; <strong>pour qui</strong> — ce
+        que portent les formations vendues à l'extérieur face à celles qui ne servent que le
+        CHU ; ce qui peut encore bouger ; des scénarios ; et la lecture d'ensemble des
+        objectifs. L'onglet d'une année croise <strong>visé, projeté, vendu et facturé</strong>
+        sur une même échelle, l'objectif en trait pointillé, puis juge le vendu au rythme de
+        l'année utile, détaille formation par formation, et porte la saisie de l'objectif —
+        à côté de ce qu'il juge.</p>
       <span class="url" data-url="pilotage.html"></span>
     </a>
     <a class="carte" href="smartof.html">
@@ -100,7 +103,10 @@
     colonnes formules du document, y compris ce que les graphiques dessinent. Les widgets
     affichent et saisissent, ils ne calculent pas — l'écran et le document ne peuvent pas
     diverger. Les objectifs sont la seule exception : ils ne se déduisent de rien, ils se
-    décident, et se saisissent dans l'onglet Projection du pilotage.</p>
+    décident, et se saisissent dans l'onglet de leur année, au bas du pilotage. Les totaux
+    par année font exception : ils sont groupés dans le widget à partir des montants que le
+    document calcule session par session, parce qu'une formule d'agrégat qui ne remonte rien
+    rend un zéro silencieux au lieu d'une erreur.</p>
 </div>
 <script>
   /* l'URL à coller dans Grist, celle du widget tel qu'il est servi ici */

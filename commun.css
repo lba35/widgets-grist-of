@@ -490,3 +490,10 @@ button.lien:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 
 .a-faire { margin: 0; padding-left: 18px; }
 .a-faire li { margin-bottom: 7px; }
+
+/* L'année, dans un tableau de synthèse, est un chemin vers son onglet :
+   un bouton qui se lit comme un libellé, pas un libellé qui cache un bouton. */
+.lien-annee { padding: 0; font: inherit; font-weight: 600; color: var(--fait);
+  background: none; border: 0; border-bottom: 1px dotted currentColor; cursor: pointer; }
+.lien-annee:hover { border-bottom-style: solid; }
+.lien-annee:focus-visible { outline: none; box-shadow: var(--ombre-focus); border-radius: 2px; }

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=35">
+<link rel="stylesheet" href="commun.css?v=36">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,8 +27,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=35"></script>
-<script src="graphes.js?v=35"></script>
+<script src="commun.js?v=36"></script>
+<script src="graphes.js?v=36"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -47,7 +47,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v35';
+var VERSION = 'v36';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -58,11 +58,11 @@ var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_int
    être créée depuis l'écran. */
 var OBJECTIFS = [
   { col: 'objectif_ca', libelle: 'Recettes', titre: 'Objectif de recettes',
-    reel: 'recettes', format: OF.eur },
+    reel: 'recettes', vendu: 'realise_vendu', format: OF.eur },
   { col: 'objectif_resultat', libelle: 'Résultat', titre: 'Objectif de résultat',
     reel: 'resultat', format: OF.eur, signe: true },
   { col: 'objectif_sessions', libelle: 'Sessions', titre: 'Objectif de sessions',
-    reel: 'sessions_total', format: OF.ent },
+    reel: 'sessions_total', vendu: 'realise_sessions', format: OF.ent },
   { col: 'objectif_heures_stagiaires', libelle: 'Heures stagiaires',
     titre: 'Objectif d\'heures stagiaires', reel: 'heures_stagiaires', format: OF.ent }
 ];
@@ -157,8 +157,8 @@ function pageProjection() {
     var w = document.createElement('p');
     w.className = 'alerte-bloc';
     w.textContent = 'Aucune session projetée pour l\'instant. La fiche formation permet de saisir '
-      + 'les sessions et les places, formation par formation. Les objectifs, en bas de cet écran, '
-      + 'peuvent être posés dès maintenant : c\'est à eux que la projection se comparera.';
+      + 'les sessions et les places, formation par formation. Les objectifs, eux, se posent dès '
+      + 'maintenant dans l\'onglet de chaque année : c\'est à eux que la projection se comparera.';
     zone.appendChild(w);
   }
 
@@ -202,7 +202,8 @@ function pageProjection() {
   scenarios(zone, annees);
 
   zone.appendChild(section('Ce que l\'on vise',
-    'Les objectifs de l\'organisme, saisis ici et comparés plus haut.'));
+    'Les objectifs face au projeté et au vendu, année par année. La saisie se fait dans '
+    + 'l\'onglet de chaque année.'));
   editeurObjectifs(zone, annees);
 
   var note = document.createElement('p');
@@ -210,7 +211,8 @@ function pageProjection() {
   note.textContent = 'Tous ces chiffres sont lus dans les colonnes calculées du document : '
     + 'ils ne sont pas recalculés ici, et ne peuvent donc pas en diverger. Le résultat est un '
     + 'résultat sur coûts directs — les charges indirectes de structure restent au budget global. '
-    + 'Seuls les objectifs sont saisis : ils ne se déduisent de rien.';
+    + 'Seuls les objectifs sont saisis : ils ne se déduisent de rien, et se posent dans '
+    + 'l\'onglet de leur année.';
   zone.appendChild(note);
   return zone;
 }
@@ -1056,7 +1058,16 @@ function grapheDomaines(zone, annees) {
 /* La synthèse répond « où va-t-on ? » sur plusieurs années. Cette page-ci
    répond « où en est-on ? » sur une seule, et c'est une autre question :
    elle se juge au rythme écoulé, pas à la trajectoire. */
+/* LA PAGE D'UNE ANNÉE, DANS L'ORDRE OÙ ON SE POSE LES QUESTIONS
+   « Est-ce qu'on y est ? » d'abord — les quatre montants côte à côte et
+   l'objectif en repère. « Est-ce qu'on est à l'heure ? » ensuite, parce que
+   la réponse n'a de sens qu'une fois le montant connu. « Qui décroche ? »
+   après, formation par formation. Et les objectifs en bas : on les pose une
+   fois, on les relit rarement — mais ici, dans l'année qu'ils concernent. */
 function pageAnnee(a) {
+  if (realiseDisponible()) OF.table('Annees').forEach(normaliserAnnee);
+  else normaliserAnnee(a);
+
   var zone = document.createElement('div');
   var h1 = document.createElement('h1');
   h1.textContent = 'Année ' + a.annee;
@@ -1065,48 +1076,80 @@ function pageAnnee(a) {
   var r = rythme(a.annee);
   var sous = document.createElement('p');
   sous.className = 'sous';
+  /* Une année future peut déjà porter du vendu : les sessions se commandent
+     à l'avance. Dire « rien à réaliser » devant 21 000 € déjà vendus
+     décrédibiliserait tout le reste de la page. */
+  var dejaVendu = (a.realise_vendu || 0) > 0;
   sous.textContent = r.future
-    ? 'Année à venir : il n\'y a encore rien à réaliser, seulement à projeter.'
+    ? (dejaVendu
+      ? 'Année à venir, déjà engagée : ' + OF.eur(a.realise_vendu) + ' sont vendus avant '
+        + 'que l\'année ne commence.'
+      : 'Année à venir : il n\'y a encore rien à réaliser, seulement à projeter.')
     : (r.revolue
       ? 'Année révolue : le réalisé est définitif.'
       : 'Année en cours : ' + r.ecoule + ' jours utiles écoulés sur ' + r.total
         + ', ' + r.libelleCreux + ' non comptés.');
   zone.appendChild(sous);
+  alerteErreurs(zone);
 
   zone.appendChild(tuilesAnnee(a));
 
-  if (realiseDisponible()) {
-    normaliserAnnee(a);
-    zone.appendChild(section('Où en est l\'année',
+  var avecRealise = realiseDisponible();
+  zone.appendChild(section(avecRealise ? 'Visé, projeté, vendu, facturé' : 'Visé et projeté',
+    avecRealise
+      ? 'Les quatre montants sur la même échelle, l\'objectif en repère : la question '
+        + '« est-ce qu\'on y est ? » se lit en une fois.'
+      : 'L\'objectif en repère, face à ce que les fiches projettent. Le vendu et le '
+        + 'facturé s\'ajouteront ici dès que SmartOF sera repris.'));
+  croisementAnnee(zone, a, avecRealise);
+
+  if (avecRealise) {
+    zone.appendChild(section('Est-ce qu\'on est à l\'heure',
       'Trois taux sur la même échelle : ce que le calendrier laisse attendre, ce qui est '
       + 'vendu, ce qui est facturé.'));
     zone.appendChild(tauxAnnee(a, r));
-    grapheAnnee(zone, a);
+
+    zone.appendChild(section('Qui porte, qui décroche',
+      'Le vendu face au projeté, formation par formation.'));
     detailFormations(zone, a);
   } else {
-    zone.appendChild(section('Où en est l\'année', ''));
     realiseAbsent(zone);
   }
+
+  zone.appendChild(section('Les objectifs de ' + a.annee,
+    'Ce que l\'organisme se fixe pour cette année. Rien ne les déduit : ils se décident, '
+    + 'et c\'est à eux que tout ce qui précède se compare.'));
+  objectifsAnnee(zone, a);
   return zone;
 }
 
 function tuilesAnnee(a) {
   var t = document.createElement('div');
   t.className = 'tuiles';
-  t.appendChild(tuile('Projeté', OF.eur(a.recettes),
-    OF.plur(a.sessions_total, 'session') + ' · ' + OF.plur(a.places, 'place')));
+  normaliserAnnee(a);
   if (realiseDisponible()) {
-    normaliserAnnee(a);
+    /* L'objectif en tête : c'est lui qui donne son sens à tout le reste.
+       Sans lui, « 481 846 € vendus » est un chiffre sans verdict. */
+    t.appendChild(tuile('Objectif', a.objectif_ca ? OF.eur(a.objectif_ca) : '—',
+      a.objectif_ca ? 'fixé pour ' + a.annee : 'non fixé — à saisir en bas de page'));
+    t.appendChild(tuile('Projeté', OF.eur(a.recettes),
+      OF.plur(a.sessions_total, 'session') + ' · ' + OF.plur(a.places, 'place')));
     t.appendChild(tuile('Vendu', OF.eur(a.realise_vendu),
       OF.plur(a.realise_sessions, 'session') + ' · ' + OF.plur(a.realise_places, 'place')));
     t.appendChild(tuile('Facturé', OF.eur(a.realise_facture), 'net d\'avoirs'));
     t.appendChild(tuile('Reste à facturer', OF.eur(a.reste_a_facturer),
       'vendu non encore émis', (a.reste_a_facturer || 0) > 0 ? 'negatif' : ''));
   } else {
+    t.appendChild(tuile('Objectif', a.objectif_ca ? OF.eur(a.objectif_ca) : '—',
+      a.objectif_ca ? 'fixé pour ' + a.annee : 'non fixé — à saisir en bas de page'));
+    t.appendChild(tuile('Projeté', OF.eur(a.recettes),
+      OF.plur(a.sessions_total, 'session') + ' · ' + OF.plur(a.places, 'place')));
     t.appendChild(tuile('Résultat', OF.eur(a.resultat),
       a.recettes ? OF.pourcent(a.resultat, a.recettes) + ' de marge' : '—'));
-    t.appendChild(tuile('Objectif', OF.eur(a.objectif_ca),
-      a.objectif_ca ? OF.eur((a.recettes || 0) - a.objectif_ca) + ' d\'écart' : 'non fixé'));
+    t.appendChild(tuile('Écart à l\'objectif',
+      a.objectif_ca ? OF.eur((a.recettes || 0) - a.objectif_ca) : '—',
+      a.objectif_ca ? 'projeté moins objectif' : 'aucun objectif fixé',
+      a.objectif_ca && (a.recettes || 0) < a.objectif_ca ? 'negatif' : ''));
   }
   return t;
 }
@@ -1137,8 +1180,8 @@ function tauxAnnee(a, r) {
     q.className = 'note';
     q.innerHTML = 'C\'est le cas normal d\'une année antérieure au plan. Pour la comparer '
       + 'malgré tout, deux chemins : poser un <b>objectif de recettes</b> pour ' + a.annee
-      + ' dans la section « Ce que l\'on vise » de la synthèse — c\'est une seule case à '
-      + 'remplir — ou projeter ses formations comme les autres années.';
+      + ' en bas de cette page — c\'est une seule case à remplir — ou projeter ses '
+      + 'formations comme les autres années.';
     zone.appendChild(q);
 
     if (!r.future) {
@@ -1221,39 +1264,99 @@ function tauxAnnee(a, r) {
   return zone;
 }
 
-/* Le vendu décomposé, face au projeté. Une seule année : des barres
-   horizontales se lisent mieux que trois piles isolées. */
-function grapheAnnee(zone, a) {
-  var lignes = [
-    { libelle: 'Projeté', valeur: a.recettes || 0 },
-    { libelle: 'Vendu', valeur: a.realise_vendu || 0 },
-    { libelle: 'dont facturé', valeur: a.realise_facture || 0 },
-    { libelle: 'dont à facturer', valeur: (a.reste_a_facturer || 0) },
-  ].filter(function (l) { return l.valeur; });
-  if (lignes.length < 2) return;
+/* LE CROISEMENT, EN UN TABLEAU ET UN GRAPHIQUE
+   Quatre montants qui se répondent, et un objectif qui les juge. Le piège
+   était de les empiler en quatre barres de même poids : l'objectif se serait
+   comparé au vendu comme une mesure parmi d'autres. Il est donc dessiné en
+   trait, pas en barre — c'est un seuil, pas un résultat.
+
+   Les pourcentages sont lus dans deux colonnes et non une, parce que les deux
+   questions sont distinctes : « où en est-on de ce qu'on s'est promis » (part
+   de l'objectif) et « où en est-on de ce qu'on a planifié » (part du projeté).
+   Une année peut tenir son objectif en ayant raté son plan, et l'inverse. */
+function croisementAnnee(zone, a, avecRealise) {
+  var obj = a.objectif_ca || 0;
+  var proj = a.recettes || 0;
+  var mesures = [
+    { libelle: 'Projeté', valeur: proj, couleur: 'var(--serie-2)',
+      quoi: 'les sessions et les places saisies dans les fiches' }
+  ];
+  if (avecRealise) mesures = mesures.concat([
+    { libelle: 'Vendu', valeur: a.realise_vendu || 0, couleur: 'var(--serie-1)',
+      quoi: 'les commandes enregistrées dans SmartOF' },
+    { libelle: 'dont facturé', valeur: a.realise_facture || 0, couleur: 'var(--serie-3)',
+      quoi: 'les factures émises, nettes d\'avoirs' },
+    { libelle: 'dont à facturer', valeur: a.reste_a_facturer || 0, couleur: 'var(--serie-4)',
+      quoi: 'vendu dont la facture n\'est pas encore partie' }
+  ]);
+  if (!mesures.some(function (m) { return m.valeur; }) && !obj) return;
+
+  var part = function (v, base) {
+    return base ? Math.round(100 * v / base) + ' %' : '—';
+  };
 
   G.figure(zone, {
     titre: 'Ce que porte ' + a.annee,
-    sous: 'Le vendu se partage entre ce qui est déjà facturé et ce qui reste à émettre.',
-    chiffres: G.chiffres('Les chiffres', ['Mesure', 'Montant', 'Part du projeté'],
-      lignes.map(function (l) {
-        return [l.libelle, OF.eur(l.valeur),
-          a.recettes ? Math.round(100 * l.valeur / a.recettes) + ' %' : '—'];
-      })),
+    sous: obj
+      ? 'Le trait pointillé est l\'objectif de ' + OF.eur(obj) + ' : les barres qui le '
+        + 'dépassent l\'ont franchi.'
+      : 'Aucun objectif fixé pour ' + a.annee + ' : les barres se comparent entre elles, '
+        + 'rien ne les juge.',
+    chiffres: G.chiffres('Les chiffres',
+      ['Mesure', 'Montant', 'Part de l\'objectif', 'Part du projeté', 'Ce que c\'est'],
+      mesures.map(function (m) {
+        return [m.libelle, OF.eur(m.valeur), part(m.valeur, obj), part(m.valeur, proj), m.quoi];
+      }).concat(obj ? [['Objectif', OF.eur(obj), '100 %', part(obj, proj),
+        'décidé, saisi en bas de cette page']] : [])),
     dessin: function (larg) {
       return G.barresHorizontales({
         larg: larg,
-        valeurs: lignes.map(function (l) {
-          return { libelle: l.libelle, valeur: l.valeur,
-            bulle: '<b>' + OF.echappe(l.libelle) + '</b><span class="second">' + OF.eur(l.valeur)
-              + (a.recettes ? ' · ' + Math.round(100 * l.valeur / a.recettes) + ' % du projeté' : '')
-              + '</span>' };
+        valeurs: mesures.map(function (m) {
+          return { libelle: m.libelle, valeur: m.valeur, couleur: m.couleur,
+            bulle: '<b>' + OF.echappe(m.libelle) + '</b><span class="second">' + OF.eur(m.valeur)
+              + (obj ? ' · ' + part(m.valeur, obj) + ' de l\'objectif' : '')
+              + (proj ? ' · ' + part(m.valeur, proj) + ' du projeté' : '')
+              + '</span><span class="second">' + OF.echappe(m.quoi) + '</span>' };
         }),
+        repere: obj ? { valeur: obj, libelle: 'objectif ' + OF.eur(obj) } : null,
         formatVal: OF.eur,
-        description: 'Projeté, vendu, facturé et reste à facturer pour ' + a.annee + '.'
+        description: 'Projeté, vendu, facturé et reste à facturer pour ' + a.annee
+          + (obj ? ', face à l\'objectif de ' + OF.eur(obj) : '') + '.'
       });
     }
   });
+
+  /* la lecture en une phrase : quatre montants, un seul verdict */
+  var v = document.createElement('p');
+  /* Sans reprise SmartOF, c'est la projection qui se confronte à l'objectif :
+     elle dit si le plan tient la promesse, pas si la promesse est tenue. */
+  var compare = avecRealise ? (a.realise_vendu || 0) : proj;
+  var quoiCompare = avecRealise ? 'vendu' : 'projeté';
+  if (obj) {
+    var manque = obj - compare;
+    v.className = 'verdict' + (manque > 0 ? ' tendu' : '');
+    v.innerHTML = manque > 0
+      ? '<b>' + OF.eur(manque) + ' manquent</b> au ' + quoiCompare + ' pour atteindre '
+        + 'l\'objectif de ' + a.annee + ' — soit ' + part(compare, obj) + ' de fait.'
+      : 'Objectif ' + (avecRealise ? 'atteint' : 'couvert par la projection')
+        + ' et dépassé de <b>' + OF.eur(-manque) + '</b>.';
+  } else {
+    v.className = 'note';
+    v.innerHTML = 'Pour que ces montants donnent un verdict, il faut un objectif : '
+      + 'une seule case, en bas de cette page.';
+  }
+  zone.appendChild(v);
+
+  /* Le reste à facturer n'est pas un écart, c'est un délai. Le dire, sinon
+     il se lit comme une perte. */
+  if (avecRealise && (a.reste_a_facturer || 0) > 0) {
+    var d = document.createElement('p');
+    d.className = 'aide';
+    d.textContent = OF.eur(a.reste_a_facturer) + ' de vendu n\'ont pas encore de facture : '
+      + 'c\'est un délai d\'émission, pas un manque de ventes. Le vendu est l\'engagement '
+      + 'du client, le facturé ce qui est parti en comptabilité.';
+    zone.appendChild(d);
+  }
 }
 
 /* Le détail par formation : c'est là qu'on voit laquelle décroche. */
@@ -1281,12 +1384,12 @@ function detailFormations(zone, a) {
 
   lignes.sort(function (x, y) { return y.vendu - x.vendu; });
 
-  zone.appendChild(titre('Formation par formation'));
   var t = document.createElement('table');
   t.className = 'matrice';
+  /* « Réalisation » laissait deviner le dénominateur : on le nomme. */
   t.innerHTML = '<thead><tr><th class="gauche">Formation</th>'
     + '<th class="calcule">Sessions</th><th>Places</th>'
-    + '<th>Projeté</th><th>Vendu</th><th>Réalisation</th>'
+    + '<th>Projeté</th><th>Vendu</th><th>% du projeté</th>'
     + '<th>Facturé</th><th>Reste à facturer</th></tr></thead>';
   var corps = document.createElement('tbody');
   lignes.forEach(function (c) {
@@ -1491,9 +1594,12 @@ function diagnosticRealise() {
           : ' Aucune table du document n\'évoque SmartOF : le widget SmartOF n\'a pas '
             + 'encore rapatrié quoi que ce soit.') };
   }
+  /* On n'exige plus de colonne d'agrégat dans Annees : le total par année se
+     fait ici, à partir des sessions. Ce qu'il faut, c'est que chaque session
+     sache son année et son montant. */
   var manque = [];
   if (!colonneReelle(t, 'annee')) manque.push(t + '.annee');
-  if (!colonneReelle('Annees', 'realise_vendu')) manque.push('Annees.realise_vendu');
+  if (!colonneReelle(t, 'vendu')) manque.push(t + '.vendu');
   if (!manque.length) return { pret: true };
   return { pret: false, cause: 'colonnes',
     detail: 'La table ' + OF.echappe(t) + ' est bien là, mais '
@@ -1503,6 +1609,44 @@ function diagnosticRealise() {
 }
 
 function realiseDisponible() { return diagnosticRealise().pret; }
+
+/* POURQUOI LE TOTAL PAR ANNÉE SE FAIT ICI, ET NON DANS LE DOCUMENT
+   Les colonnes d'agrégat de `Annees` répondaient zéro alors que les colonnes
+   de session, elles, calculaient juste : la même page affichait « 0 € vendu »
+   en tuile et 481 846 € dans le tableau juste en dessous. Une formule
+   d'agrégat qui ne remonte rien est indétectable à l'œil — elle rend un zéro,
+   pas une erreur. Et un zéro faux est pire qu'un message d'absence.
+
+   Additionner ici les valeurs que le document a calculées session par session
+   n'est pas recalculer : les montants, l'année et la formation viennent tous
+   du document, et c'est déjà ce que fait le tableau « formation par
+   formation » depuis le début. On ne fait que grouper. */
+function nombre(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+var VIDE = { sessions: 0, places: 0, vendu: 0, facture: 0, reste: 0 };
+var REALISE_CACHE = null;
+
+function realiseParAnnee() {
+  if (REALISE_CACHE) return REALISE_CACHE;
+  var T = tableSessions();
+  var par = {};
+  if (T) {
+    OF.table(T).forEach(function (sess) {
+      if (champDe(sess, T, 'archive')) return;
+      var idA = champDe(sess, T, 'annee');
+      if (!idA) return;
+      var c = par[idA] = par[idA]
+        || { sessions: 0, places: 0, vendu: 0, facture: 0 };
+      c.sessions++;
+      c.places += nombre(champDe(sess, T, 'places_vendues'));
+      c.vendu += nombre(champDe(sess, T, 'vendu'));
+      c.facture += nombre(champDe(sess, T, 'facture_ht'));
+    });
+  }
+  Object.keys(par).forEach(function (k) { par[k].reste = par[k].vendu - par[k].facture; });
+  REALISE_CACHE = par;
+  return par;
+}
+function realiseDe(a) { return (a && realiseParAnnee()[a.id]) || VIDE; }
 
 function couverture() {
   var dates = [], T = tableSessions() || 'SmartOF_sessions';
@@ -1517,33 +1661,39 @@ function couverture() {
     sessions: OF.table(T).length };
 }
 
+/* Les colonnes fautives, dites partout où on lit leurs valeurs — synthèse
+   comme onglet d'année. Un zéro faux ne se voit pas ; il faut l'annoncer là
+   où il s'affiche, pas seulement sur l'écran d'à côté. */
+function alerteErreurs(zone) {
+  var fautives = colonnesEnErreur();
+  if (!fautives.length) return;
+  var e = document.createElement('p');
+  e.className = 'alerte-bloc';
+  e.innerHTML = '<b>' + OF.plur(fautives.length, 'colonne') + ' du document '
+    + OF.accord(fautives.length, 'est en erreur', 'sont en erreur') + '</b>, et '
+    + OF.accord(fautives.length, 'sa valeur', 'leurs valeurs')
+    + ' ne vaut donc pas zéro : rien n\'est calculé. '
+    + fautives.map(function (f) {
+        return '<br><code>' + OF.echappe(f.table + '.' + f.colonne) + '</code> — '
+          + OF.echappe(f.message);
+      }).join('');
+  zone.appendChild(e);
+  var e2 = document.createElement('p');
+  e2.className = 'note';
+  e2.innerHTML = 'Une formule en erreur référence presque toujours un champ sous un nom '
+    + 'qu\'il n\'a pas. Relancer <code>realise_smartof_grist.js</code> corrige les formules '
+    + 'qu\'il pose : il résout chaque nom avant d\'écrire, et refuse de tourner si un champ '
+    + 'manque.';
+  zone.appendChild(e2);
+}
+
 function realiseSection(zone, annees) {
   if (!realiseDisponible()) { realiseAbsent(zone); return; }
   var a = OF.parId(OF.table('Annees'))[idAnnee];
   if (!a) return;
-  annees.concat([a]).forEach(normaliserAnnee);
+  OF.table('Annees').forEach(normaliserAnnee);
 
-  var fautives = colonnesEnErreur();
-  if (fautives.length) {
-    var e = document.createElement('p');
-    e.className = 'alerte-bloc';
-    e.innerHTML = '<b>' + OF.plur(fautives.length, 'colonne') + ' du document '
-      + OF.accord(fautives.length, 'est en erreur', 'sont en erreur') + '</b>, et '
-      + OF.accord(fautives.length, 'sa valeur', 'leurs valeurs')
-      + ' ne vaut donc pas zéro : rien n\'est calculé. '
-      + fautives.map(function (f) {
-          return '<br><code>' + OF.echappe(f.table + '.' + f.colonne) + '</code> — '
-            + OF.echappe(f.message);
-        }).join('');
-    zone.appendChild(e);
-    var e2 = document.createElement('p');
-    e2.className = 'note';
-    e2.innerHTML = 'Une formule en erreur référence presque toujours un champ sous un nom '
-      + 'qu\'il n\'a pas. Relancer <code>realise_smartof_grist.js</code> corrige les formules '
-      + 'qu\'il pose : il résout chaque nom avant d\'écrire, et refuse de tourner si un champ '
-      + 'manque.';
-    zone.appendChild(e2);
-  }
+  alerteErreurs(zone);
 
   var c = couverture();
   if (c) {
@@ -1635,9 +1785,7 @@ function realiseSection(zone, annees) {
 /* Les colonnes du réalisé peuvent elles aussi porter un identifiant inattendu.
    Plutôt que de truffer l'écran d'appels à champDe, on recopie une fois les
    valeurs sous les noms que le reste du code attend. */
-var CHAMPS_ANNEE = ['realise_sessions', 'realise_places', 'realise_vendu',
-  'realise_facture', 'reste_a_facturer', 'ecart_vendu', 'taux_realisation',
-  'objectif_ca', 'recettes'];
+var CHAMPS_ANNEE = ['objectif_ca', 'recettes'];
 function normaliserAnnee(a) {
   if (!a || a.__realiseNormalise) return;
   CHAMPS_ANNEE.forEach(function (c) {
@@ -1646,6 +1794,14 @@ function normaliserAnnee(a) {
       if (v !== undefined) a[c] = v;
     }
   });
+  /* le réalisé vient des sessions, pas de colonnes d'agrégat */
+  var r = realiseDe(a);
+  a.realise_sessions = r.sessions;
+  a.realise_places = r.places;
+  a.realise_vendu = r.vendu;
+  a.realise_facture = r.facture;
+  a.reste_a_facturer = r.reste;
+  a.ecart_vendu = a.recettes ? r.vendu - a.recettes : 0;
   a.__realiseNormalise = true;
 }
 
@@ -1681,6 +1837,7 @@ function realiseAbsent(zone) {
    ne s'additionne à rien — c'est un repère sur la même échelle, dessiné comme
    l'objectif l'est plus haut. */
 function realiseGraphe(zone, annees) {
+  annees.forEach(normaliserAnnee);
   var series = ['Facturé', 'Reste à facturer'];
   var parts = [
     function (a) { return a.realise_facture || 0; },
@@ -1715,14 +1872,19 @@ function realiseGraphe(zone, annees) {
     }),
     chiffres: G.chiffres('Les chiffres',
       ['Mesure'].concat(annees.map(function (a) { return String(a.annee); })),
-      [['Projeté'].concat(annees.map(function (a) { return a.recettes ? OF.eur(a.recettes) : '—'; })),
+      [['Objectif'].concat(annees.map(function (a) { return a.objectif_ca ? OF.eur(a.objectif_ca) : '—'; })),
+       ['Projeté'].concat(annees.map(function (a) { return a.recettes ? OF.eur(a.recettes) : '—'; })),
        ['Vendu'].concat(annees.map(function (a) { return a.realise_vendu ? OF.eur(a.realise_vendu) : '—'; })),
        ['Facturé'].concat(annees.map(function (a) { return a.realise_facture ? OF.eur(a.realise_facture) : '—'; })),
        ['Reste à facturer'].concat(annees.map(function (a) {
          var r = (a.realise_vendu || 0) - (a.realise_facture || 0);
          return r ? OF.eur(r) : '—';
        })),
-       ['Réalisation'].concat(annees.map(function (a) {
+       ['% de l\'objectif'].concat(annees.map(function (a) {
+         return a.objectif_ca
+           ? Math.round(100 * (a.realise_vendu || 0) / a.objectif_ca) + ' %' : '—';
+       })),
+       ['% du projeté'].concat(annees.map(function (a) {
          return a.recettes ? Math.round(100 * (a.realise_vendu || 0) / a.recettes) + ' %' : '—';
        }))]),
     dessin: function (larg, haut) {
@@ -1737,15 +1899,21 @@ function realiseGraphe(zone, annees) {
 }
 
 function realiseTableau(zone, annees) {
+  annees.forEach(normaliserAnnee);
   var t = document.createElement('table');
   t.className = 'matrice';
+  /* On croise quatre montants et deux taux. Le « % objectif » et le
+     « % projeté » répondent à deux questions différentes : ce qu'on s'était
+     promis, et ce qu'on avait planifié. Les confondre dans une colonne
+     « Réalisation » laissait le lecteur deviner le dénominateur. */
   t.innerHTML = '<thead><tr><th class="gauche">Année</th>'
     + '<th class="calcule">Sessions</th><th>Places</th>'
-    + '<th>Projeté</th><th>Vendu</th><th>Réalisation</th>'
+    + '<th>Objectif</th><th>Projeté</th><th>Vendu</th>'
+    + '<th>% objectif</th><th>% projeté</th>'
     + '<th>Facturé</th><th>Reste à facturer</th></tr></thead>';
   var corps = document.createElement('tbody');
   annees.forEach(function (a) {
-    if (!a.realise_sessions && !a.recettes) return;
+    if (!a.realise_sessions && !a.recettes && !a.objectif_ca) return;
     var tr = document.createElement('tr');
     if (a.id === idAnnee) tr.className = 'courante';
     var td = document.createElement('td');
@@ -1753,8 +1921,10 @@ function realiseTableau(zone, annees) {
     td.textContent = String(a.annee);
     tr.appendChild(td);
     [[OF.ent(a.realise_sessions), true], [OF.ent(a.realise_places), false],
+     [a.objectif_ca ? OF.eur(a.objectif_ca) : '—', false],
      [a.recettes ? OF.eur(a.recettes) : '—', false],
      [OF.eur(a.realise_vendu), false],
+     [a.objectif_ca ? OF.pourcent(a.realise_vendu, a.objectif_ca) : '—', false],
      [a.recettes ? OF.pourcent(a.realise_vendu, a.recettes) : '—', false],
      [OF.eur(a.realise_facture), false],
      [OF.eur(a.reste_a_facturer), false]
@@ -2115,12 +2285,124 @@ function defilant(t) {
 /* La seule saisie de cet écran. Un objectif ne se calcule pas : il se
    décide. On l'écrit donc dans la table Annees, à côté du réalisé qui lui
    fait face. */
+/* LA LECTURE D'ENSEMBLE, EN SYNTHÈSE — LA MAIN EST DANS LES ONGLETS
+   Le tableau de saisie vivait ici, toutes années confondues : pour remplir
+   une case il fallait trouver sa ligne parmi huit, et l'objectif se saisissait
+   loin du réalisé qu'il juge. La saisie est donc passée dans l'onglet de
+   chaque année. Reste ici ce que la synthèse sait faire mieux : les mettre
+   toutes côte à côte.
+
+   Quatre colonnes de montants et deux de taux, c'est la croix complète :
+   ce qu'on visait, ce qu'on a planifié, ce qu'on a vendu, ce qui est parti en
+   facture. Un clic sur l'année ouvre son onglet. */
 function editeurObjectifs(zone, annees) {
   var possibles = objectifsPossibles();
   var tenus = objectifsTenus();
   var manquants = possibles.filter(function (o) { return tenus.indexOf(o) < 0; });
+  var avecRealise = realiseDisponible();
+  if (avecRealise) OF.table('Annees').forEach(normaliserAnnee);
+  else annees.forEach(normaliserAnnee);
 
-  zone.appendChild(titre('Fixer les objectifs'));
+  zone.appendChild(titre('Objectifs et réalisé, toutes années'));
+
+  if (tenus.length) {
+    var p = document.createElement('p');
+    p.className = 'note';
+    p.innerHTML = 'Lecture seule ici. <b>La saisie se fait dans l\'onglet de chaque '
+      + 'année</b>, à côté de ce que l\'objectif juge — cliquez sur une année pour l\'ouvrir.';
+    zone.appendChild(p);
+
+    var t = document.createElement('table');
+    t.className = 'matrice objectifs';
+    t.style.marginTop = '12px';
+    t.innerHTML = '<thead><tr><th class="gauche">Année</th>'
+      + '<th>Objectif</th><th class="calcule">Projeté</th>'
+      + (avecRealise ? '<th>Vendu</th><th>Facturé</th><th>% de l\'objectif</th>' : '')
+      + '<th>Écart au ' + (avecRealise ? 'vendu' : 'projeté') + '</th></tr></thead>';
+    var corps = document.createElement('tbody');
+    var principal = tenus[0];
+
+    annees.forEach(function (a) {
+      var tr = document.createElement('tr');
+
+      /* l'année est un bouton, pas un libellé : c'est le chemin vers la saisie */
+      var tdA = document.createElement('td');
+      tdA.className = 'gauche an';
+      var lien = document.createElement('button');
+      lien.type = 'button';
+      lien.className = 'lien-annee';
+      lien.textContent = a.annee;
+      lien.title = 'Ouvrir l\'onglet ' + a.annee;
+      lien.addEventListener('click', function () {
+        vue = String(a.id); idAnnee = a.id; rendre();
+      });
+      tdA.appendChild(lien);
+      tr.appendChild(tdA);
+
+      var obj = a[principal.col] || 0;
+      var proj = a[principal.reel] || 0;
+      var vendu = avecRealise ? (a.realise_vendu || 0) : null;
+      var cellules = [
+        [obj ? principal.format(obj) : '—', 'calcul'],
+        [principal.format(proj), 'calcul calcule']
+      ];
+      if (avecRealise) {
+        cellules.push([OF.eur(vendu), 'calcul']);
+        cellules.push([OF.eur(a.realise_facture || 0), 'calcul']);
+        cellules.push([obj ? Math.round(100 * vendu / obj) + ' %' : '—',
+          'calcul' + (obj ? (vendu >= obj ? ' positif' : '') : '')]);
+      }
+      /* L'écart se mesure sur le vendu dès qu'on l'a : c'est lui qui est
+         réel. Sans réalisé, on retombe sur le projeté. */
+      var compare = avecRealise ? vendu : proj;
+      cellules.push(obj
+        ? [(compare - obj >= 0 ? '+' : '') + principal.format(compare - obj),
+           'calcul ' + (compare >= obj ? 'positif' : 'negatif')]
+        : ['—', 'calcul']);
+
+      cellules.forEach(function (c) {
+        var td = document.createElement('td');
+        td.className = c[1];
+        td.textContent = c[0];
+        tr.appendChild(td);
+      });
+      corps.appendChild(tr);
+    });
+    t.appendChild(corps);
+    zone.appendChild(defilant(t));
+
+    var leg = document.createElement('p');
+    leg.className = 'aide';
+    leg.textContent = avecRealise
+      ? 'L\'objectif et le projeté portent sur ' + principal.libelle.toLowerCase()
+        + '. L\'écart se mesure au vendu, pas au projeté : c\'est le vendu qui est réel.'
+      : 'Sans reprise SmartOF, l\'écart se mesure au projeté. Le widget SmartOF ramène le '
+        + 'vendu et le facturé.';
+    zone.appendChild(leg);
+
+    if (tenus.length > 1) {
+      var autres = document.createElement('p');
+      autres.className = 'note';
+      autres.textContent = 'Les autres objectifs suivis — '
+        + tenus.slice(1).map(function (o) { return o.libelle.toLowerCase(); }).join(', ')
+        + ' — se lisent et se saisissent dans l\'onglet de chaque année.';
+      zone.appendChild(autres);
+    }
+  }
+
+  colonnesObjectifAbsentes(zone, manquants, tenus.length);
+}
+
+/* LES OBJECTIFS D'UNE SEULE ANNÉE
+   Ils se saisissaient dans un tableau de la synthèse, toutes années mêlées :
+   huit lignes de cases pour en remplir une. Ici, on est déjà dans l'année —
+   il n'y a qu'une ligne possible, et la case est à côté de ce qu'elle juge.
+
+   La synthèse garde la lecture d'ensemble ; c'est l'onglet qui porte la main. */
+function objectifsAnnee(zone, a) {
+  var possibles = objectifsPossibles();
+  var tenus = objectifsTenus();
+  var manquants = possibles.filter(function (o) { return tenus.indexOf(o) < 0; });
 
   if (!OF.doc.metaOk) {
     var m = document.createElement('p');
@@ -2133,48 +2415,68 @@ function editeurObjectifs(zone, annees) {
   }
 
   if (tenus.length) {
-    var p = document.createElement('p');
-    p.className = 'note';
-    p.textContent = 'Saisie directe : la valeur part à l\'enregistrement quand vous quittez la '
-      + 'case ou appuyez sur Entrée. Les graphiques et les écarts se recalculent ensuite depuis '
-      + 'le document.';
-    zone.appendChild(p);
+    var aide = document.createElement('p');
+    aide.className = 'note';
+    aide.textContent = 'La valeur part à l\'enregistrement quand vous quittez la case ou '
+      + 'appuyez sur Entrée ; tout l\'écran se recalcule ensuite depuis le document.';
+    zone.appendChild(aide);
 
     var t = document.createElement('table');
     t.className = 'matrice objectifs';
     t.style.marginTop = '12px';
-    t.innerHTML = '<thead><tr><th class="gauche">Année</th>'
-      + tenus.map(function (o) { return '<th>' + OF.echappe(o.libelle) + '</th>'; }).join('')
-      + '<th class="calcule">Réalisé projeté</th><th>Écart</th></tr></thead>';
+    /* Sans reprise SmartOF, la colonne « Vendu » n'aurait que des tirets :
+       on ne la dresse pas, et l'écart se dit alors au projeté. */
+    var avecVendu = realiseDisponible();
+    t.innerHTML = '<thead><tr><th class="gauche">Ce que l\'on vise</th>'
+      + '<th class="gauche">Objectif ' + a.annee + '</th>'
+      + '<th class="calcule">Projeté</th>'
+      + (avecVendu ? '<th>Vendu</th>' : '')
+      + '<th>Écart au ' + (avecVendu ? 'vendu' : 'projeté') + '</th></tr></thead>';
     var corps = document.createElement('tbody');
 
-    annees.forEach(function (a) {
+    tenus.forEach(function (o) {
       var tr = document.createElement('tr');
-      var tdA = document.createElement('td');
-      tdA.className = 'gauche an';
-      tdA.textContent = a.annee;
-      tr.appendChild(tdA);
 
-      tenus.forEach(function (o) {
-        var td = document.createElement('td');
-        td.className = 'gauche';
-        td.appendChild(celluleObjectif(a, o));
-        tr.appendChild(td);
-      });
+      var tdL = document.createElement('td');
+      tdL.className = 'gauche libelle';
+      tdL.textContent = o.libelle;
+      tr.appendChild(tdL);
 
-      var premier = tenus[0];
-      var reel = a[premier.reel] || 0;
-      var tdR = document.createElement('td');
-      tdR.className = 'calcul calcule';
-      tdR.textContent = premier.format(reel);
-      tr.appendChild(tdR);
+      var tdS = document.createElement('td');
+      tdS.className = 'gauche';
+      tdS.appendChild(celluleObjectif(a, o));
+      tr.appendChild(tdS);
+
+      var proj = a[o.reel] || 0;
+      var tdP = document.createElement('td');
+      tdP.className = 'calcul calcule';
+      tdP.textContent = o.format(proj);
+      tr.appendChild(tdP);
+
+      /* Le vendu n'existe que pour ce que SmartOF sait dire : les recettes et
+         les sessions. Pour le résultat ou les heures stagiaires, la colonne
+         reste vide — mieux vaut un tiret qu'un zéro qui se lirait comme un
+         échec. */
+      var aVendu = o.vendu && avecVendu;
+      var vendu = aVendu ? (a[o.vendu] || 0) : null;
+      if (avecVendu) {
+        var tdV = document.createElement('td');
+        tdV.className = 'calcul';
+        tdV.textContent = aVendu ? o.format(vendu) : '—';
+        tr.appendChild(tdV);
+      }
 
       var tdE = document.createElement('td');
       tdE.className = 'calcul';
-      if (a[premier.col]) {
-        var e = reel - a[premier.col];
-        tdE.textContent = (e >= 0 ? '+' : '') + premier.format(e);
+      if (a[o.col] && aVendu) {
+        var e = vendu - a[o.col];
+        tdE.textContent = (e >= 0 ? '+' : '') + o.format(e);
         tdE.classList.add(e >= 0 ? 'positif' : 'negatif');
+      } else if (a[o.col] && !aVendu) {
+        var e2 = proj - a[o.col];
+        tdE.textContent = (e2 >= 0 ? '+' : '') + o.format(e2);
+        tdE.title = 'écart au projeté : aucun réalisé n\'est disponible pour cette mesure';
+        tdE.classList.add(e2 >= 0 ? 'positif' : 'negatif');
       } else {
         tdE.textContent = '—';
       }
@@ -2185,45 +2487,51 @@ function editeurObjectifs(zone, annees) {
     zone.appendChild(defilant(t));
 
     var leg = document.createElement('p');
-    leg.className = 'note';
-    leg.style.marginTop = '10px';
-    leg.textContent = 'Les deux dernières colonnes confrontent l\'objectif de ' +
-      tenus[0].libelle.toLowerCase() + ' au réalisé projeté.';
+    leg.className = 'aide';
+    leg.textContent = avecVendu
+      ? 'Le projeté vient des fiches formation, le vendu de SmartOF. L\'écart se mesure au '
+        + 'vendu quand il existe pour cette mesure, au projeté sinon — l\'infobulle le dit.'
+      : 'Le projeté vient des fiches formation. Le vendu apparaîtra ici dès que le widget '
+        + 'SmartOF aura repris le réalisé.';
     zone.appendChild(leg);
   }
 
-  if (manquants.length) {
-    var bloc = document.createElement('p');
-    bloc.className = 'note';
-    bloc.style.marginTop = tenus.length ? '18px' : '0';
-    bloc.textContent = tenus.length
-      ? 'D\'autres objectifs peuvent être suivis — ' + manquants.map(function (o) {
-          return o.libelle.toLowerCase();
-        }).join(', ') + ' — mais la colonne correspondante n\'existe pas encore dans la table '
-        + 'Annees.'
-      : 'Aucune colonne d\'objectif n\'existe encore dans la table Annees. Elle peut être créée '
-        + 'd\'ici : une colonne numérique par objectif, à côté du réalisé.';
-    zone.appendChild(bloc);
+  colonnesObjectifAbsentes(zone, manquants, tenus.length);
+}
 
-    var b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'outil';
-    b.style.marginTop = '10px';
-    b.textContent = 'Créer ' + (manquants.length > 1
-      ? 'les ' + manquants.length + ' colonnes d\'objectif manquantes'
-      : 'la colonne « ' + manquants[0].titre + ' »');
-    b.addEventListener('click', function () {
-      b.disabled = true;
-      OF.appliquer(manquants.map(function (o) {
-        return ['AddVisibleColumn', 'Annees', o.col, {
-          type: 'Numeric', label: o.titre, widgetOptions: '{"decimals":0,"maxDecimals":0}'
-        }];
-      }), TABLES, function () {
-        OF.chargerColonnes().then(rendre);
-      }).catch(function () { b.disabled = false; });
-    });
-    zone.appendChild(b);
-  }
+/* Le bouton qui crée les colonnes manquantes, partagé par les deux écrans. */
+function colonnesObjectifAbsentes(zone, manquants, dejaDesObjectifs) {
+  if (!manquants.length) return;
+  var bloc = document.createElement('p');
+  bloc.className = 'note';
+  bloc.style.marginTop = dejaDesObjectifs ? '18px' : '0';
+  bloc.textContent = dejaDesObjectifs
+    ? 'D\'autres objectifs peuvent être suivis — ' + manquants.map(function (o) {
+        return o.libelle.toLowerCase();
+      }).join(', ') + ' — mais la colonne correspondante n\'existe pas encore dans la table '
+      + 'Annees.'
+    : 'Aucune colonne d\'objectif n\'existe encore dans la table Annees. Elle peut être créée '
+      + 'd\'ici : une colonne numérique par objectif, à côté du réalisé.';
+  zone.appendChild(bloc);
+
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.style.marginTop = '10px';
+  b.textContent = 'Créer ' + (manquants.length > 1
+    ? 'les ' + manquants.length + ' colonnes d\'objectif manquantes'
+    : 'la colonne « ' + manquants[0].titre + ' »');
+  b.addEventListener('click', function () {
+    b.disabled = true;
+    OF.appliquer(manquants.map(function (o) {
+      return ['AddVisibleColumn', 'Annees', o.col, {
+        type: 'Numeric', label: o.titre, widgetOptions: '{"decimals":0,"maxDecimals":0}'
+      }];
+    }), TABLES, function () {
+      OF.chargerColonnes().then(rendre);
+    }).catch(function () { b.disabled = false; });
+  });
+  zone.appendChild(b);
 }
 
 function celluleObjectif(annee, obj) {
@@ -2304,6 +2612,7 @@ function rendreOnglets() {
 
 function rendre() {
   G.oublier();
+  REALISE_CACHE = null;
   rendreOnglets();
   var page = OF.$('page');
   page.innerHTML = '';

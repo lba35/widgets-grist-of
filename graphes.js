@@ -183,9 +183,10 @@ var G = (function () {
       var v = d.valeur || 0;
       var x = a.bx(i) + (a.bande - larg) / 2;
       var g = el('g');
-      var couleur = conf.polarite
-        ? (v < 0 ? 'var(--neg)' : 'var(--pos)')
-        : (conf.couleur || 'var(--serie-1)');
+      var couleur = d.couleur
+        || (conf.polarite
+          ? (v < 0 ? 'var(--neg)' : 'var(--pos)')
+          : (conf.couleur || 'var(--serie-1)'));
 
       if (d.valeur || d.valeur === 0) {
         g.appendChild(el('path', { d: cheminBarre(x, larg, yZero, a.y(v), 4), fill: couleur }));
@@ -373,11 +374,16 @@ var G = (function () {
     var vals = conf.valeurs;
     var hLigne = 26, hBarre = 13;
     var mg = Math.min(conf.largLibelle || 230, Math.round(conf.larg * 0.38));
-    var md = 78, mh = 6;
+    /* Le libellé du repère a besoin de sa propre bande : posé dans le cadre,
+       il tombait sur le bout de la première barre. */
+    var etiqRepere = !!(conf.repere && conf.repere.libelle);
+    var md = 78, mh = etiqRepere ? 20 : 6;
     var pw = Math.max(40, conf.larg - mg - md);
     var haut = mh * 2 + hLigne * vals.length;
 
     var bornes = vals.map(function (d) { return d.valeur || 0; }).concat([0]);
+    /* le repère entre dans l'échelle, sinon il sortirait du cadre */
+    if (conf.repere && typeof conf.repere.valeur === 'number') bornes.push(conf.repere.valeur);
     var min = Math.min.apply(null, bornes), max = Math.max.apply(null, bornes);
     if (max === min) max = min + 1;
     var x = function (v) { return mg + (v - min) / (max - min) * pw; };
@@ -388,7 +394,7 @@ var G = (function () {
       role: 'img', 'aria-label': conf.description || ''
     });
     svg.appendChild(el('line', {
-      x1: Math.round(x0) + 0.5, x2: Math.round(x0) + 0.5, y1: mh, y2: haut - mh,
+      x1: Math.round(x0) + 0.5, x2: Math.round(x0) + 0.5, y1: mh, y2: haut - 6,
       stroke: 'var(--trait-fort)', 'stroke-width': 1
     }));
 
@@ -396,9 +402,10 @@ var G = (function () {
       var v = d.valeur || 0;
       var yc = mh + hLigne * i + hLigne / 2;
       var g = el('g');
-      var couleur = conf.polarite
-        ? (v < 0 ? 'var(--neg)' : 'var(--pos)')
-        : (conf.couleur || 'var(--serie-1)');
+      var couleur = d.couleur
+        || (conf.polarite
+          ? (v < 0 ? 'var(--neg)' : 'var(--pos)')
+          : (conf.couleur || 'var(--serie-1)'));
 
       /* la barre part de zéro et s'arrondit du côté de la valeur */
       var xv = x(v), gauche = Math.min(x0, xv), larg = Math.abs(xv - x0);
@@ -432,6 +439,23 @@ var G = (function () {
       g.appendChild(cible);
       svg.appendChild(g);
     });
+
+    /* Le repère par-dessus les barres : l'objectif est un seuil à franchir,
+       on le dessine en trait, pas en barre — une cinquième barre se serait
+       comparée aux autres au lieu de les juger. */
+    if (conf.repere && typeof conf.repere.valeur === 'number') {
+      var xr = Math.round(x(conf.repere.valeur)) + 0.5;
+      svg.appendChild(el('line', {
+        x1: xr, x2: xr, y1: etiqRepere ? 4 : mh, y2: haut - 6,
+        stroke: 'var(--trait-fort)', 'stroke-width': 1.5, 'stroke-dasharray': '4 3'
+      }));
+      if (etiqRepere) {
+        /* près du bord droit, l'étiquette passe à gauche du trait */
+        var cote = xr > mg + pw * 0.62 ? 'end' : 'start';
+        svg.appendChild(txt(xr + (cote === 'end' ? -5 : 5), 13, conf.repere.libelle,
+          { ancre: cote, couleur: 'var(--sourd)', taille: 10.5, gras: 500 }));
+      }
+    }
     return svg;
   }
 
