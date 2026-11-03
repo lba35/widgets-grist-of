@@ -648,6 +648,32 @@ Le **détail par année du pilotage** fait la même chose à l'envers : au lieu 
 session et les liens. Plus un lien vers la page de rapprochement quand son adresse est dans
 `Parametres`, à la clé `page_smartof`.
 
+## Ne pas faire saisir ce que le document sait déjà
+
+Le drapeau posé, restait la question qui compte : faut-il requalifier deux cents établissements
+à la main ? Non — et s'il avait fallu, l'outil aurait été mal fait.
+
+Les organisations portent un **segment**, et `Segments.interne` dit, depuis le travail sur le
+périmètre, quels publics sont internes au CHU. La facturation s'en déduit donc presque toujours.
+Le widget **propose**, ligne par ligne, avec sa raison en infobulle — « segment
+« Établissements privés », marqué public extérieur » — et un bouton applique toutes les
+propositions d'un coup.
+
+Trois garde-fous :
+
+- **Rien n'est écrit d'office.** Classer le chiffre d'affaires de quelqu'un sans le lui demander
+  n'est pas à l'outil de le décider ; mais le faire doit tenir en un bouton.
+- **Une valeur saisie n'est jamais remplacée**, y compris par ce bouton.
+- La colonne « D'après le segment » reste affichée sur les lignes **déjà qualifiées** : une
+  saisie qui contredit le segment s'y voit en rouge. C'est souvent le segment qui est à corriger.
+
+Pour les organisations qu'aucun segment ne tranche, le widget ne demande pas de cocher ici : il
+demande de **renseigner leur segment**, qui sert aussi aux ventes et au périmètre. Une donnée
+saisie une fois vaut mieux que la même décision prise deux fois à deux endroits.
+
+Reste le cas du particulier : il paie pour lui-même, il n'est pas le CHU. C'est la seule autre
+déduction tenue pour sûre ; au-delà, l'outil ne devine pas.
+
 ## Interne ou externe : le drapeau vit sur l'organisation
 
 SmartOF crée un commanditaire **par session** : le même établissement y revient à chaque fois.

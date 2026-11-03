@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=41">
+<link rel="stylesheet" href="commun.css?v=42">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,8 +25,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=41"></script>
-<script src="smartof_sync.js?v=41"></script>
+<script src="commun.js?v=42"></script>
+<script src="smartof_sync.js?v=42"></script>
 <script>
 'use strict';
 /* L'écran du widget SmartOF. Tout ce qui parle à l'API et au document vit
@@ -36,7 +36,7 @@ var SY = window.SmartOFSync;
 var CLE_BASE = SY.CLE_BASE, CLE_JETON = SY.CLE_JETON, CLE_DERNIER = SY.CLE_DERNIER;
 var FENETRES = SY.FENETRES, SCHEMAS = SY.SCHEMAS;
 /* la grille tarifaire sert aux choix de catégorie sur les organisations */
-var TABLES = SY.TABLES.concat(['Categories_tarifaires']);
+var TABLES = SY.TABLES.concat(['Categories_tarifaires', 'Segments']);
 var reglage = SY.reglage, ecrireReglage = SY.ecrireReglage;
 var colonneTexteParametres = SY.colonneTexteParametres;
 var base = SY.base, jeton = SY.jeton, configure = SY.configure;
@@ -52,7 +52,7 @@ var parcourir = SY.parcourir, curseurDe = SY.curseurDe;
 var parametresDeFenetre = SY.parametresDeFenetre, NOMS_REELS = SY.NOMS_REELS;
 var dernierRapport = null;
 
-var VERSION = 'v41';
+var VERSION = 'v42';
 
 
 /* ------------------------------------------------------------- rendu --- */
@@ -450,6 +450,87 @@ function sectionCorrespondance() {
   return zone;
 }
 
+/* NE PAS FAIRE SAISIR CE QUE LE DOCUMENT SAIT DÉJÀ
+   Les organisations portent un segment, et `Segments.interne` dit depuis le
+   travail sur le périmètre quels publics sont internes au CHU. Demander de
+   requalifier deux cents établissements à la main alors que la réponse est
+   déjà dans le document serait une faute : la saisie manuelle doit servir à
+   trancher ce que rien ne tranche, pas à recopier.
+
+   La proposition n'est jamais écrite d'office. Classer le chiffre d'affaires
+   de quelqu'un sans le lui demander n'est pas à moi de le décider — mais
+   l'appliquer doit tenir en un bouton, et chaque ligne dit d'où vient sa
+   proposition. */
+function propositionFacturation(o) {
+  var idSeg = o.segment;
+  if (idSeg) {
+    var seg = OF.parId(OF.table('Segments'))[idSeg];
+    if (seg && typeof seg.interne === 'boolean') {
+      return { valeur: seg.interne ? 'Interne' : 'Externe',
+        raison: 'segment « ' + (OF.texte(seg.intitule) || idSeg) + ' », marqué '
+          + (seg.interne ? 'interne au CHU' : 'public extérieur') };
+    }
+  }
+  /* Un particulier paie pour lui-même : il n'est pas le CHU. C'est la seule
+     autre déduction sûre ; au-delà, on ne devine pas. */
+  if (OF.texte(o.type).toLowerCase() === 'particulier') {
+    return { valeur: 'Externe', raison: 'un particulier n\'est pas une entité du CHU' };
+  }
+  return null;
+}
+
+/* Les propositions applicables : seulement les lignes encore vides. */
+function propositionsEnAttente(orgs) {
+  return orgs.map(function (o) {
+    if (OF.texte(o.facturation)) return null;
+    var p = propositionFacturation(o);
+    return p ? { o: o, p: p } : null;
+  }).filter(Boolean);
+}
+
+function boutonPropositions(zone, orgs, T) {
+  var liste = propositionsEnAttente(orgs);
+  if (!liste.length) return;
+
+  var internes = liste.filter(function (x) { return x.p.valeur === 'Interne'; }).length;
+  var externes = liste.length - internes;
+
+  var d = document.createElement('div');
+  d.className = 'barre-synchro';
+
+  var info = document.createElement('span');
+  info.innerHTML = '<b>' + OF.plur(liste.length, 'organisation') + '</b> '
+    + OF.accord(liste.length, 'peut être qualifiée', 'peuvent être qualifiées')
+    + ' automatiquement : ' + externes + ' en externe, ' + internes + ' en interne, '
+    + 'd\'après leur segment.';
+  d.appendChild(info);
+
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Appliquer ' + (liste.length > 1
+    ? 'ces ' + liste.length + ' propositions' : 'cette proposition');
+  b.addEventListener('click', function () {
+    b.disabled = true;
+    OF.appliquer(liste.map(function (x) {
+      return ['UpdateRecord', T, x.o.id, { facturation: x.p.valeur }];
+    }), relire(), function () {
+      OF.signaler(OF.plur(liste.length, 'organisation') + ' '
+        + OF.accord(liste.length, 'qualifiée', 'qualifiées'));
+      rendre();
+    }).catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
+  });
+  d.appendChild(b);
+  zone.appendChild(d);
+
+  var n = document.createElement('p');
+  n.className = 'aide';
+  n.textContent = 'Chaque ligne du tableau dit d\'où vient sa proposition. Rien n\'est '
+    + 'écrit tant que vous ne l\'avez pas demandé, et une valeur déjà saisie n\'est jamais '
+    + 'remplacée — y compris par ce bouton.';
+  zone.appendChild(n);
+}
+
 /* QUI FACTURE-T-ON : INTERNE OU EXTERNE
    La question se pose une fois par établissement, pas une fois par session.
    SmartOF crée pourtant un commanditaire par session : le même hôpital y
@@ -490,6 +571,8 @@ function sectionOrganisations() {
   });
   zone.appendChild(t);
 
+  if (OF.doc.metaOk && OF.colonne(T, 'facturation').type) boutonPropositions(zone, orgs, T);
+
   if (!OF.doc.metaOk || !OF.colonne(T, 'facturation').type) {
     var al = document.createElement('p');
     al.className = 'alerte-bloc';
@@ -516,6 +599,7 @@ function sectionOrganisations() {
   tab.innerHTML = '<thead><tr><th class="gauche">Organisation</th>'
     + '<th class="calcule">Sessions</th><th>Facturé HT</th>'
     + '<th class="gauche">Facturation</th>'
+    + '<th class="gauche">D\'après le segment</th>'
     + (avecCat ? '<th class="gauche">Catégorie tarifaire</th>' : '') + '</tr></thead>';
   var corps = document.createElement('tbody');
   var sessions = sessionsParEntreprise();
@@ -549,6 +633,23 @@ function sectionOrganisations() {
     f.appendChild(choixFacturation(o, T));
     tr.appendChild(f);
 
+    /* D'où viendrait la proposition : la montrer même quand la ligne est
+       déjà qualifiée permet de repérer une saisie qui contredit le segment. */
+    var tp = document.createElement('td');
+    tp.className = 'gauche';
+    var prop = propositionFacturation(o);
+    if (!prop) {
+      tp.innerHTML = '<span class="second">aucun segment : à trancher</span>';
+    } else {
+      var actuel = OF.texte(o.facturation);
+      var contredit = actuel && actuel !== prop.valeur;
+      tp.innerHTML = '<span class="' + (contredit ? 'negatif' : 'second') + '">'
+        + OF.echappe(prop.valeur) + (contredit ? ' — contredit votre saisie' : '')
+        + '</span>';
+      tp.title = prop.raison;
+    }
+    tr.appendChild(tp);
+
     if (avecCat) {
       var tc = document.createElement('td');
       tc.className = 'gauche';
@@ -566,6 +667,30 @@ function sectionOrganisations() {
     + 'l\'externe : elles apparaissent à part dans le pilotage, pour qu\'un ventilé '
     + 'incomplet ne se lise jamais comme un ventilé complet.';
   zone.appendChild(note);
+
+  /* Pour celles que le segment ne tranche pas, le bon geste n'est pas de
+     cocher ici : c'est de leur donner un segment, qui sert aussi aux ventes
+     et au périmètre. Une donnée saisie une fois vaut mieux que la même
+     décision prise deux fois à deux endroits. */
+  var sansSegment = orgs.filter(function (o) {
+    return !OF.texte(o.facturation) && !propositionFacturation(o);
+  });
+  if (sansSegment.length) {
+    var q = document.createElement('p');
+    q.className = 'note';
+    q.innerHTML = '<b>' + OF.plur(sansSegment.length, 'organisation') + '</b> '
+      + OF.accord(sansSegment.length, 'n\'a', 'n\'ont') + ' pas de segment : '
+      + OF.accord(sansSegment.length, 'elle ne peut', 'elles ne peuvent')
+      + ' donc pas être qualifiée' + (sansSegment.length > 1 ? 's' : '') + ' toute'
+      + (sansSegment.length > 1 ? 's' : '') + ' seule' + (sansSegment.length > 1 ? 's' : '')
+      + '. Plutôt que de cocher ici, renseignez leur segment dans '
+      + '<code>' + OF.echappe(T) + '</code> : il sert aussi aux ventes et au périmètre, et '
+      + 'ce bouton les qualifiera ensuite d\'un coup. '
+      + sansSegment.slice(0, 6).map(function (o) {
+          return OF.echappe(nomOrganisation(o) || '(sans nom)');
+        }).join(' · ') + (sansSegment.length > 6 ? ' …' : '');
+    zone.appendChild(q);
+  }
   return zone;
 }
 
