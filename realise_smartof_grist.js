@@ -286,8 +286,18 @@
     `sum(c.${C.nb_apprenants} or 0 for c in ${COMMANDITAIRES})`));
   await poser('SmartOF_sessions', 'vendu', F('Vendu',
     `sum(c.${C.budget} or 0 for c in ${COMMANDITAIRES})`));
+  /* UNE FACTURE ARCHIVÉE RESTE DUE
+     La première version excluait les factures archivées, comme on exclut les
+     sessions archivées. C'était faux : chez SmartOF, archiver une facture la
+     range, ne l'annule pas. La formule sous-estimait donc le facturé, sans
+     que rien ne le signale. On ne retire désormais que les annulées. */
+  /* Python ne retire pas les accents : on liste les deux écritures plutôt
+     que d'ajouter une normalisation dans chaque formule. */
+  const ANNULES = "('annule','annulee','annul\u00e9','annul\u00e9e','annul\u00e9es',"
+    + "'cancelled','canceled','void','abandonne','abandonn\u00e9','abandonn\u00e9e')";
   await poser('SmartOF_sessions', 'facture_ht', F('Facturé HT, net d\'avoirs',
-    `sum((f.${FA.montant_ht} or 0) - (f.${FA.avoirs} or 0) for f in ${FACTURES} if not f.${FA.archive})`));
+    `sum((f.${FA.montant_ht} or 0) - (f.${FA.avoirs} or 0) for f in ${FACTURES}`
+    + ` if (f.statut or '').strip().lower() not in ${ANNULES})`));
   await poser('SmartOF_sessions', 'reste_a_facturer', F('Reste à facturer',
     'return ($vendu or 0) - ($facture_ht or 0)'));
 

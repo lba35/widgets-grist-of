@@ -519,3 +519,14 @@ a.code-session:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 
 .bloc-rapprochement { margin-top: 18px; }
 .bloc-rapprochement .matrice { margin-top: 12px; }
+
+/* Le champ filtrant du rapprochement, et sa confirmation. */
+.filtrant { min-width: 240px; }
+.filtrant .champ { width: 100%; text-align: left; }
+.confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.filtrant .confirmation { margin-top: 6px; }
+.confirmation.barre { margin-top: 12px; padding: 10px 12px; background: var(--surface);
+  border: 1px solid var(--trait-fort); font-size: 13px; }
+.confirmation.barre.vide { display: none; }
+.outil.discret { background: none; border-color: transparent; color: var(--sourd); }
+.outil.discret:hover { border-color: var(--trait); }

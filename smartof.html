@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=43">
+<link rel="stylesheet" href="commun.css?v=44">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,8 +25,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=43"></script>
-<script src="smartof_sync.js?v=43"></script>
+<script src="commun.js?v=44"></script>
+<script src="smartof_sync.js?v=44"></script>
 <script>
 'use strict';
 /* L'écran du widget SmartOF. Tout ce qui parle à l'API et au document vit
@@ -48,11 +48,13 @@ var normaliser = SY.normaliser, quandMaintenant = SY.quandMaintenant;
 var CLE_DERNIER_ISO = SY.CLE_DERNIER_ISO;
 var CLE_APP = SY.CLE_APP, lienSession = SY.lienSession;
 var nomOrganisation = SY.nomOrganisation;
+var factureCompte = SY.factureCompte;
+var lienEntreprise = SY.lienEntreprise;
 var parcourir = SY.parcourir, curseurDe = SY.curseurDe;
 var parametresDeFenetre = SY.parametresDeFenetre, NOMS_REELS = SY.NOMS_REELS;
 var dernierRapport = null;
 
-var VERSION = 'v43';
+var VERSION = 'v44';
 
 
 /* ------------------------------------------------------------- rendu --- */
@@ -417,6 +419,8 @@ function sectionCorrespondance() {
   tab.innerHTML = '<thead><tr><th class="gauche">Produit SmartOF</th>'
     + '<th class="gauche">Code Gesform</th><th class="gauche">Sessions concernées</th>'
     + '<th class="gauche">Formation du catalogue</th></tr></thead>';
+  var zoneConfF = document.createElement('div');
+  zoneConfF.className = 'confirmation barre vide';
   var corps = document.createElement('tbody');
   var parProduit = sessionsParProduit();
   orphelins.forEach(function (p) {
@@ -434,12 +438,13 @@ function sectionCorrespondance() {
     tr.appendChild(celluleSessions(parProduit[OF.texte(p.produit_uid)]));
     var f = document.createElement('td');
     f.className = 'gauche';
-    f.appendChild(choixFormation(p));
+    f.appendChild(choixFormation(p, zoneConfF));
     tr.appendChild(f);
     corps.appendChild(tr);
   });
   tab.appendChild(corps);
   zone.appendChild(defilantLocal(tab));
+  zone.appendChild(zoneConfF);
 
   var note = document.createElement('p');
   note.className = 'aide';
@@ -449,6 +454,124 @@ function sectionCorrespondance() {
     + 'le produit réel sans perdre sa place ici.';
   zone.appendChild(note);
   return zone;
+}
+
+/* UNE LISTE DÉROULANTE NE TIENT PAS À DEUX CENTS ENTRÉES
+   Chercher « Hôpital privé des Côtes d'Armor » dans un <select> de deux
+   cents lignes se fait au clavier, à l'aveugle, et se trompe. Un champ de
+   saisie filtrant va droit au but.
+
+   Et comme un rapprochement faux envoie de l'argent sur le mauvais objet, le
+   choix ne s'applique pas à la frappe : il se confirme. La confirmation dit
+   les deux côtés en toutes lettres — c'est le seul moment où l'erreur est
+   encore gratuite.
+
+   `<datalist>` plutôt qu'une liste maison : la recherche, le clavier et
+   l'accessibilité sont ceux du navigateur, et il n'y a rien à maintenir. */
+var SEQ_LISTE = 0;
+function champFiltrant(conf) {
+  /* conf = { options:[{id,nom,groupe}], placeholder, surChoix(id, nom) } */
+  var boite = document.createElement('div');
+  boite.className = 'filtrant';
+
+  var id = 'liste-' + (++SEQ_LISTE);
+  var dl = document.createElement('datalist');
+  dl.id = id;
+  var parNom = {};
+  conf.options.forEach(function (o) {
+    /* deux options de même libellé rendraient le choix ambigu : on les
+       distingue plutôt que de laisser le hasard trancher */
+    var nom = parNom[o.nom] === undefined ? o.nom : o.nom + ' (' + o.id + ')';
+    parNom[nom] = o.id;
+    parNom[o.nom] = parNom[o.nom] === undefined ? o.id : parNom[o.nom];
+    var op = document.createElement('option');
+    op.value = nom;
+    if (o.groupe) op.label = o.groupe;
+    dl.appendChild(op);
+  });
+  boite.appendChild(dl);
+
+  var ch = document.createElement('input');
+  ch.type = 'text';
+  ch.className = 'champ saisie';
+  ch.setAttribute('list', id);
+  ch.placeholder = conf.placeholder || 'Taper pour filtrer…';
+  ch.autocomplete = 'off';
+  boite.appendChild(ch);
+
+  /* LA CONFIRMATION NE VIT PAS DANS LA CELLULE
+     Posée dans le tableau, elle se retrouvait derrière le bord droit dès que
+     la fenêtre était étroite : le tableau défile horizontalement, et le
+     bouton partait avec. Un bouton qu'on ne peut pas atteindre est un bouton
+     qui n'existe pas. Elle s'affiche donc dans une barre fixe sous le
+     tableau, une seule à la fois — ce qui rend aussi évident qu'on ne
+     confirme qu'un rapprochement à la fois. */
+  var conf2 = conf.zoneConfirmation || document.createElement('div');
+  if (!conf.zoneConfirmation) {
+    conf2.className = 'confirmation';
+    boite.appendChild(conf2);
+  }
+
+  /* NE PAS RECONSTRUIRE UNE PROPOSITION IDENTIQUE
+     Cliquer « Confirmer » fait d'abord perdre le focus au champ, ce qui
+     déclenche `change`, ce qui reconstruisait la barre — le bouton
+     disparaissait sous le curseur et le clic se perdait. Tant que la valeur
+     n'a pas changé, on ne touche à rien. */
+  var propose = null;
+  var proposer = function () {
+    var v = ch.value.trim();
+    if (v === propose) return;
+    propose = v;
+    conf2.innerHTML = '';
+    conf2.classList.toggle('vide', true);
+    if (!v) return;
+    conf2.classList.toggle('vide', false);
+    var cible = parNom[v];
+    if (cible === undefined) {
+      var inconnu = document.createElement('span');
+      inconnu.className = 'second negatif';
+      inconnu.textContent = 'Aucune entrée ne porte ce nom — choisissez dans la liste.';
+      conf2.appendChild(inconnu);
+      return;
+    }
+    var q = document.createElement('span');
+    q.className = 'second';
+    q.textContent = conf.question ? conf.question(v) : ('Rapprocher avec « ' + v + ' » ?');
+    conf2.appendChild(q);
+
+    var oui = document.createElement('button');
+    oui.type = 'button';
+    oui.className = 'outil';
+    oui.textContent = 'Confirmer';
+    oui.addEventListener('click', function () {
+      oui.disabled = true;
+      conf.surChoix(cible, v);
+    });
+    conf2.appendChild(oui);
+
+    var non = document.createElement('button');
+    non.type = 'button';
+    non.className = 'outil discret';
+    non.textContent = 'Annuler';
+    non.addEventListener('click', function () {
+      ch.value = ''; propose = ''; conf2.innerHTML = '';
+      conf2.classList.add('vide'); ch.focus();
+    });
+    conf2.appendChild(non);
+  };
+  ch.addEventListener('focus', function () {
+    /* la barre est partagée : en revenant sur un champ, on réaffiche sa
+       proposition plutôt que celle d'une autre ligne */
+    propose = null;
+    if (ch.value.trim()) proposer();
+  });
+  ch.addEventListener('change', proposer);
+  ch.addEventListener('input', function () {
+    /* un choix pris dans la liste déclenche `input` sans `change` sur
+       certains navigateurs : on propose dès que la valeur est reconnue */
+    if (parNom[ch.value.trim()] !== undefined) proposer();
+  });
+  return boite;
 }
 
 /* RAPPROCHER LES ENTREPRISES SMARTOF DES ORGANISATIONS DU DOCUMENT
@@ -487,7 +610,7 @@ function entreprisesSmartOF() {
     entrepriseDe[OF.texte(c.uid)] = OF.texte(c.entreprise_uid);
   });
   OF.table(Tf).forEach(function (f) {
-    if (f.archive) return;
+    if (!factureCompte(f)) return;
     var u = entrepriseDe[OF.texte(f.commanditaire_uid)];
     if (!u || !par[u]) return;
     var d = OF.texte(f.destinataire).trim();
@@ -557,6 +680,9 @@ function sectionRapprochementOrgs() {
 
   boutonPropositionsOrgs(zone, orphelines, T);
 
+  var zoneConf = document.createElement('div');
+  zoneConf.className = 'confirmation barre vide';
+
   var tab = document.createElement('table');
   tab.className = 'matrice rappro-orgs';
   tab.innerHTML = '<thead><tr><th class="gauche">Entreprise SmartOF</th>'
@@ -581,6 +707,19 @@ function sectionRapprochementOrgs() {
     n.appendChild(s2);
     tr.appendChild(n);
 
+    var lien = lienEntreprise(e.uid);
+    if (lien) {
+      var a = document.createElement('a');
+      a.className = 'code-session';
+      a.href = lien; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = 'fiche SmartOF';
+      a.title = 'Ouvrir la fiche de cette entreprise dans SmartOF';
+      var ligneLien = document.createElement('div');
+      ligneLien.style.marginTop = '4px';
+      ligneLien.appendChild(a);
+      n.appendChild(ligneLien);
+    }
+
     var ns = document.createElement('td');
     ns.className = 'calcul calcule';
     ns.textContent = OF.ent(e.nbSessions);
@@ -595,12 +734,13 @@ function sectionRapprochementOrgs() {
 
     var ch = document.createElement('td');
     ch.className = 'gauche';
-    ch.appendChild(choixOrganisation(e, T));
+    ch.appendChild(choixOrganisation(e, T, zoneConf));
     tr.appendChild(ch);
     corps.appendChild(tr);
   });
   tab.appendChild(corps);
   zone.appendChild(defilantLocal(tab));
+  zone.appendChild(zoneConf);
 
   if (orphelines.length > MAX) {
     var p = document.createElement('p');
@@ -667,58 +807,45 @@ function nettoyerLignesVides(zone, T) {
 
 /* Le choix : une organisation existante, ou une ligne neuve portant le nom
    connu de SmartOF. */
-function choixOrganisation(e, T) {
-  var s = document.createElement('select');
-  s.className = 'champ saisie';
-  s.style.width = '100%';
-  s.style.textAlign = 'left';
-
-  var vide = document.createElement('option');
-  vide.value = '';
-  vide.textContent = '— à rattacher —';
-  vide.selected = true;
-  s.appendChild(vide);
-
+function choixOrganisation(e, T, zoneConf) {
+  var options = [];
   if (e.libelle) {
-    var neuf = document.createElement('option');
-    neuf.value = 'neuf';
-    neuf.textContent = '+ créer « ' + e.libelle + ' »';
-    s.appendChild(neuf);
+    options.push({ id: 'neuf', nom: '+ créer « ' + e.libelle + ' »',
+      groupe: 'Nouvelle ligne' });
   }
-
   /* les organisations encore libres d'abord : une ligne déjà rattachée à une
      autre entreprise ne peut pas l'être à celle-ci */
   var libres = [], prises = [];
   OF.table(T).forEach(function (o) {
     (OF.texte(o.entreprise_uid) ? prises : libres).push(o);
   });
-  var ajouter = function (liste, titre) {
-    if (!liste.length) return;
-    var g = document.createElement('optgroup');
-    g.label = titre;
+  var pousser = function (liste, groupe) {
     liste.slice().sort(function (a, b) {
       return (nomOrganisation(a) || '').localeCompare(nomOrganisation(b) || '');
     }).forEach(function (o) {
-      var op = document.createElement('option');
-      op.value = String(o.id);
-      op.textContent = nomOrganisation(o) || '(ligne ' + o.id + ')';
-      g.appendChild(op);
+      options.push({ id: o.id, nom: nomOrganisation(o) || '(ligne ' + o.id + ')',
+        groupe: groupe });
     });
-    s.appendChild(g);
   };
-  ajouter(libres, 'Sans identifiant SmartOF');
-  ajouter(prises, 'Déjà rattachées à une autre entreprise');
+  pousser(libres, 'Sans identifiant SmartOF');
+  pousser(prises, 'Déjà rattachée à une autre entreprise');
 
-  s.addEventListener('change', function () {
-    if (!s.value) return;
-    s.disabled = true;
-    var action = s.value === 'neuf'
-      ? ['AddRecord', T, null, nouvelleOrganisation(e, T)]
-      : ['UpdateRecord', T, +s.value, { entreprise_uid: e.uid }];
-    OF.appliquer([action], relire(), function () { rendre(); })
-      .catch(function (err) { s.disabled = false; OF.signaler(err.message, true); });
+  return champFiltrant({
+    options: options,
+    zoneConfirmation: zoneConf,
+    placeholder: 'Taper le nom de l\'organisation…',
+    question: function (nom) {
+      return 'Rattacher « ' + (e.libelle || e.uid.slice(0, 8) + '…') + ' » (SmartOF) à « '
+        + nom + ' » ?';
+    },
+    surChoix: function (cible) {
+      var action = cible === 'neuf'
+        ? ['AddRecord', T, null, nouvelleOrganisation(e, T)]
+        : ['UpdateRecord', T, +cible, { entreprise_uid: e.uid }];
+      OF.appliquer([action], relire(), function () { rendre(); })
+        .catch(function (err) { OF.signaler(err.message, true); });
+    }
   });
-  return s;
 }
 
 function nouvelleOrganisation(e, T) {
@@ -1088,7 +1215,7 @@ function factureParEntreprise() {
   });
   var par = {};
   OF.table(vraiNom('SmartOF_factures')).forEach(function (f) {
-    if (f.archive) return;
+    if (!factureCompte(f)) return;
     var e = parCommanditaire[OF.texte(f.commanditaire_uid)];
     if (!e) return;
     par[e] = (par[e] || 0) + (typeof f.montant_ht === 'number' ? f.montant_ht : 0)
@@ -1174,7 +1301,30 @@ function lienVersSession(s) {
   return a;
 }
 
-function choixFormation(p) {
+function choixFormation(p, zoneConf) {
+  var formations = OF.formationsTriees();
+  /* au-delà d'une vingtaine, une liste déroulante devient un mur : on passe
+     au champ filtrant, qui se confirme */
+  if (formations.length > 20) {
+    return champFiltrant({
+      zoneConfirmation: zoneConf,
+      options: formations.map(function (f) {
+        return { id: f.id,
+          nom: (OF.texte(f.code) ? OF.texte(f.code) + ' — ' : '')
+            + (OF.texte(f.intitule) || 'formation ' + f.id) };
+      }),
+      placeholder: 'Taper le code ou l\'intitulé…',
+      question: function (nom) {
+        return 'Rapprocher « ' + (OF.texte(p.nom) || 'ce produit') + ' » (SmartOF) avec « '
+          + nom + ' » ?';
+      },
+      surChoix: function (id) {
+        OF.appliquer([['UpdateRecord', vraiNom('SmartOF_produits'), p.id,
+          { formation: +id }]], relire(), function () { rendre(); })
+          .catch(function (err) { OF.signaler(err.message, true); });
+      }
+    });
+  }
   var s = document.createElement('select');
   s.className = 'champ saisie';
   s.style.width = '100%';

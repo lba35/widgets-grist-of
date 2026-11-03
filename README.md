@@ -648,6 +648,35 @@ Le **détail par année du pilotage** fait la même chose à l'envers : au lieu 
 session et les liens. Plus un lien vers la page de rapprochement quand son adresse est dans
 `Parametres`, à la clé `page_smartof`.
 
+## Une facture archivée reste une facture
+
+Première version : les factures archivées étaient exclues du facturé, comme les sessions
+archivées le sont du vendu. **C'était faux.** Chez SmartOF, archiver une facture la range ; elle
+reste due et payée. Les exclure retirait du chiffre d'affaires réel, en silence — le « facturé »
+affiché était un minimum sans que rien ne le dise.
+
+La règle est donc : **une facture compte, sauf si elle est annulée.** Un avoir n'annule pas non
+plus, il se déduit.
+
+Comme le vocabulaire exact des statuts n'est pas documenté, l'écran affiche le **facturé statut
+par statut**, avec la mention « comptée : oui / non ». Une règle qui se vérifie vaut mieux
+qu'une règle qu'on croit.
+
+Conséquence technique : le facturé par année ne vient plus de `SmartOF_sessions.facture_ht`,
+posée par le script avec l'ancienne règle, mais de la somme des factures elles-mêmes. Montants,
+avoirs et statuts sont des colonnes du document — on ne fait que grouper, et la règle s'applique
+en un seul endroit pour tout l'écran. Le script a été corrigé aussi, pour qui s'appuie sur les
+colonnes du document.
+
+### Un drapeau de cache qui ne s'effaçait pas
+
+En chemin, un défaut plus sournois : `normaliserAnnee` posait un booléen sur chaque
+enregistrement pour ne pas recalculer deux fois. Or les enregistrements survivent d'un rendu à
+l'autre — le recalcul ne se refaisait donc **jamais**. Les montants restaient justes par
+accident (ils étaient collés sur l'enregistrement), mais tout ce que le passage calcule au vol
+restait vide, et un rafraîchissement SmartOF sans rechargement de page aurait figé les chiffres.
+Le drapeau porte désormais le numéro du rendu : il expire tout seul.
+
 ## Comment le ventilé interne/externe est fabriqué
 
 Quatre maillons, et il suffit qu'un seul manque pour que le facturé tombe dans « pas encore
@@ -685,7 +714,35 @@ Deviner mieux n'était pas la réponse — un faux rattachement envoie du factur
   sessions cliquables, et une liste déroulante des organisations du document. Trié par facturé
   décroissant : vingt clics couvrent l'essentiel de l'argent.
 - **Les noms viennent des factures** quand le commanditaire n'en porte pas. Un identifiant
-  n'est pas un nom, et on ne demande à personne de traduire un UUID.
+  n'est pas un nom, et on ne demande à personne de traduire un UUID. Chaque ligne porte aussi
+  un lien vers la **fiche de l'entreprise** dans SmartOF, pour comparer avant de trancher.
+
+### Le rapprochement se fait à un seul endroit
+
+La liste des produits à rapprocher s'affichait dans chaque onglet d'année, donc cinq fois,
+chacune tronquée à ce que l'année contient — un même produit réclamait d'être traité dans trois
+onglets, et on ne savait jamais s'il en restait ailleurs. Elle vit désormais **uniquement dans
+le widget SmartOF**, où elle couvre toutes les années. L'onglet d'année dit seulement ce qu'il
+perd à ne pas l'avoir fait, et y mène.
+
+### Un champ filtrant, et une confirmation
+
+Chercher « Hôpital privé des Côtes d'Armor » dans une liste déroulante de deux cents lignes se
+fait à l'aveugle et se trompe. Au-delà d'une vingtaine d'entrées, le choix passe à un **champ de
+saisie filtrant** (`<datalist>` : la recherche et le clavier sont ceux du navigateur).
+
+Et comme un rapprochement faux envoie de l'argent sur le mauvais objet, le choix **ne s'applique
+pas à la frappe** : il se confirme, et la confirmation nomme les deux côtés en toutes lettres.
+
+Deux détails qui ont demandé d'être corrigés après coup, et qui auraient gêné un utilisateur
+réel autant qu'ils ont gêné le test :
+
+- La barre de confirmation était **dans le tableau**, qui défile horizontalement : sur une
+  fenêtre étroite le bouton passait derrière le bord droit. Un bouton qu'on ne peut pas
+  atteindre est un bouton qui n'existe pas. Elle est désormais sous le tableau, fixe.
+- Cliquer « Confirmer » fait d'abord **perdre le focus** au champ, donc `change`, donc la barre
+  se reconstruisait — le bouton disparaissait sous le curseur et le clic se perdait. Une
+  proposition identique ne se reconstruit plus.
 
 ## Ne pas faire saisir ce que le document sait déjà
 

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=43">
+<link rel="stylesheet" href="commun.css?v=44">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,9 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=43"></script>
-<script src="graphes.js?v=43"></script>
-<script src="smartof_sync.js?v=43"></script>
+<script src="commun.js?v=44"></script>
+<script src="graphes.js?v=44"></script>
+<script src="smartof_sync.js?v=44"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -48,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v43';
+var VERSION = 'v44';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -181,6 +181,7 @@ function colonneLibelleOrg(T) {
 
 var VENTILE_CACHE = null;
 function ventilationFacture() {
+  realiseParAnnee();   /* remplit FACTURE_DETAIL, et garde une règle unique */
   if (VENTILE_CACHE) return VENTILE_CACHE;
   var To = tableProche('Organisations_clientes');
   var Tf = tableProche('SmartOF_factures');
@@ -220,8 +221,10 @@ function ventilationFacture() {
     anneeDeSession[OF.texte(champDe(sess, Ts, 'uid'))] = champDe(sess, Ts, 'annee');
   });
 
+  var SYv = window.SmartOFSync;
+  var compteV = SYv ? SYv.factureCompte : function () { return true; };
   OF.table(Tf).forEach(function (f) {
-    if (f.archive) return;
+    if (!compteV(f)) return;
     var idA = anneeDeSession[OF.texte(f.session_uid)];
     if (!idA) { out.sansSession++; return; }
     var e = entrepriseDe[OF.texte(f.commanditaire_uid)] || '';
@@ -450,8 +453,10 @@ function croisementTarifs(a) {
       anneeDeSession[OF.texte(champDe(sess, Ts, 'uid'))] = champDe(sess, Ts, 'annee');
     });
     var factureDe = {};
+    var SYt = window.SmartOFSync;
+    var compteT = SYt ? SYt.factureCompte : function () { return true; };
     OF.table(Tf).forEach(function (f) {
-      if (f.archive) return;
+      if (!compteT(f)) return;
       var k = OF.texte(f.commanditaire_uid);
       if (!k) return;
       factureDe[k] = (factureDe[k] || 0) + nombre(f.montant_ht) - nombre(f.avoirs);
@@ -1890,6 +1895,8 @@ function pageAnnee(a) {
   croisementAnnee(zone, a, avecRealise);
 
   if (avecRealise) {
+    detailStatuts(zone);
+
     zone.appendChild(section('Est-ce qu\'on est à l\'heure',
       'Trois taux sur la même échelle : ce que le calendrier laisse attendre, ce qui est '
       + 'vendu, ce qui est facturé.'));
@@ -2220,12 +2227,15 @@ function detailFormations(zone, a) {
   blocRapprochement(zone, aRapprocher, T);
 }
 
-/* RAPPROCHER SANS CHANGER D'ÉCRAN
-   « Produit non rapproché » dans un tableau ne dit pas de quoi il s'agit : ni
-   quel produit, ni quelles sessions. On les nomme ici, avec le lien qui ouvre
-   la session dans SmartOF — c'est en la lisant qu'on sait à quelle formation
-   du catalogue la rattacher. Le choix, lui, se fait dans le widget SmartOF :
-   un lien y mène quand son adresse est connue. */
+/* LE RAPPROCHEMENT A UNE SEULE VUE, ET ELLE N'EST PAS ICI
+   La liste des produits à rapprocher s'affichait dans chaque onglet d'année,
+   donc cinq fois, chacune tronquée à ce que l'année contient. Un même produit
+   réclamait d'être traité dans trois onglets différents — et on ne savait
+   jamais s'il en restait ailleurs.
+
+   Le rapprochement se fait donc à un seul endroit, dans le widget SmartOF,
+   où il couvre toutes les années d'un coup. Ici, on dit seulement ce que
+   l'année perd à ne pas l'avoir fait, et on y mène. */
 var CLE_PAGE_SMARTOF = 'page_smartof';
 function parametreTexte(cle) {
   var p = OF.table('Parametres').filter(function (x) {
@@ -2234,97 +2244,14 @@ function parametreTexte(cle) {
   return p ? OF.texte(p.texte).trim() : '';
 }
 
-function blocRapprochement(zone, sessions, T) {
-  if (!sessions || !sessions.length) return;
-
-  /* une ligne par produit, pas une par session : c'est le produit qui se
-     rapproche, et une même formation revient des dizaines de fois */
-  var parProduit = {};
-  sessions.forEach(function (sess) {
-    var cle = OF.texte(champDe(sess, T, 'produit_uid'))
-      || OF.texte(champDe(sess, T, 'produit_nom')) || '(inconnu)';
-    var c = parProduit[cle] = parProduit[cle]
-      || { nom: OF.texte(champDe(sess, T, 'produit_nom')) || '(sans intitulé)',
-           code: OF.texte(champDe(sess, T, 'code_gesform')), sessions: [], vendu: 0 };
-    c.sessions.push(sess);
-    c.vendu += nombre(champDe(sess, T, 'vendu'));
-  });
-  var produits = Object.keys(parProduit).map(function (k) { return parProduit[k]; })
-    .sort(function (x, y) { return y.vendu - x.vendu; });
-
-  var d = document.createElement('div');
-  d.className = 'bloc-rapprochement';
-
-  var p = document.createElement('p');
-  p.className = 'alerte-bloc';
-  p.innerHTML = '<b>' + OF.plur(produits.length, 'produit SmartOF') + '</b> '
-    + OF.accord(produits.length, 'n\'est', 'ne sont') + ' pas rapproché'
-    + (produits.length > 1 ? 's' : '') + ' du catalogue, pour '
-    + OF.eur(produits.reduce(function (n, x) { return n + x.vendu; }, 0))
-    + ' de vendu. Ce montant compte dans les totaux de l\'année, mais ne se rattache à '
-    + 'aucune formation : il manque donc dans le tableau ci-dessus.';
-  d.appendChild(p);
-
-  var t = document.createElement('table');
-  t.className = 'matrice';
-  t.innerHTML = '<thead><tr><th class="gauche">Produit SmartOF</th>'
-    + '<th class="gauche">Code Gesform</th><th class="calcule">Sessions</th>'
-    + '<th>Vendu</th><th class="gauche">Ouvrir dans SmartOF</th></tr></thead>';
-  var corps = document.createElement('tbody');
-  produits.forEach(function (c) {
-    var tr = document.createElement('tr');
-    var tdN = document.createElement('td');
-    tdN.className = 'gauche libelle';
-    tdN.textContent = c.nom;
-    tr.appendChild(tdN);
-
-    var tdC = document.createElement('td');
-    tdC.className = 'gauche';
-    tdC.innerHTML = c.code ? '<code>' + OF.echappe(c.code) + '</code>'
-      : '<span class="second">custom_field_20 vide</span>';
-    tr.appendChild(tdC);
-
-    var tdS = document.createElement('td');
-    tdS.className = 'calcul calcule';
-    tdS.textContent = OF.ent(c.sessions.length);
-    tr.appendChild(tdS);
-
-    var tdV = document.createElement('td');
-    tdV.className = 'calcul';
-    tdV.textContent = OF.eur(c.vendu);
-    tr.appendChild(tdV);
-
-    tr.appendChild(celluleLiens(c.sessions, T));
-    corps.appendChild(tr);
-  });
-  t.appendChild(corps);
-  d.appendChild(defilant(t));
-
-  var ou = document.createElement('p');
-  ou.className = 'note';
-  var page = parametreTexte(CLE_PAGE_SMARTOF);
-  if (page) {
-    ou.innerHTML = 'Le rapprochement se fait dans le widget SmartOF, section « La liaison '
-      + 'avec le catalogue » : <a href="' + OF.echappe(page) + '" target="_blank" '
-      + 'rel="noopener noreferrer">ouvrir cette page</a>. Un choix fait là-bas n\'est jamais '
-      + 'écrasé par un rafraîchissement.';
-  } else {
-    ou.innerHTML = 'Le rapprochement se fait dans le widget <b>SmartOF</b>, section « La '
-      + 'liaison avec le catalogue ». Collez ici l\'adresse de la page Grist qui le porte, '
-      + 'et le lien sera direct la prochaine fois.';
-    d.appendChild(ou);
-    d.appendChild(saisiePageSmartOF());
-    zone.appendChild(d);
-    return;
-  }
-  d.appendChild(ou);
-  zone.appendChild(d);
-}
-
 /* Enregistrer l'adresse de la page de rapprochement, depuis l'endroit où on
-   s'aperçoit qu'elle manque. Demander à l'utilisateur d'aller créer une ligne
-   dans Parametres à la main, c'est lui demander de faire le travail du
-   widget. */
+   s'aperçoit qu'elle manque. Demander d'aller créer une ligne dans
+   Parametres à la main, c'est faire faire à l'utilisateur le travail du
+   widget.
+
+   Note : `ecrireParametre` existe déjà pour les réglages numériques, qui
+   vivent dans la colonne `valeur`. Une adresse est du texte et va dans
+   `texte` — deux colonnes, deux fonctions, plutôt qu'une qui devine. */
 function saisiePageSmartOF() {
   var d = document.createElement('div');
   d.className = 'barre-synchro';
@@ -2353,17 +2280,14 @@ function saisiePageSmartOF() {
     }
     ch.classList.remove('erreur');
     b.disabled = true;
-    ecrireParametre(CLE_PAGE_SMARTOF, v).then(function () {
-      rendre();
-    }).catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
+    ecrireParametreTexte(CLE_PAGE_SMARTOF, v)
+      .then(function () { rendre(); })
+      .catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
   });
   return d;
 }
 
-/* Écrire un réglage dans Parametres : la ligne existe ou se crée.
-   La colonne `texte` est celle qui porte les valeurs non numériques ; sans
-   elle, on le dit plutôt que d'écrire ailleurs. */
-function ecrireParametre(cle, valeur) {
+function ecrireParametreTexte(cle, valeur) {
   if (!OF.colonne('Parametres', 'texte').type) {
     return Promise.reject(new Error('La table Parametres n\'a pas de colonne « texte » : '
       + 'le widget SmartOF propose de la créer.'));
@@ -2377,38 +2301,48 @@ function ecrireParametre(cle, valeur) {
   return OF.appliquer([action], ['Parametres'], function () {});
 }
 
-/* Au plus six numéros : au-delà, la cellule devient un mur. */
-function celluleLiens(sessions, T) {
-  var td = document.createElement('td');
-  td.className = 'gauche';
-  var SY = window.SmartOFSync;
-  var boite = document.createElement('div');
-  boite.className = 'codes-session';
-  sessions.slice(0, 6).forEach(function (sess) {
-    var code = OF.texte(champDe(sess, T, 'custom_id'))
-      || OF.texte(champDe(sess, T, 'nom'))
-      || OF.texte(champDe(sess, T, 'uid')).slice(0, 8);
-    var url = SY ? SY.lienSession(champDe(sess, T, 'uid')) : null;
-    var el;
-    if (url) {
-      el = document.createElement('a');
-      el.href = url; el.target = '_blank'; el.rel = 'noopener noreferrer';
-      el.title = 'Ouvrir cette session dans SmartOF';
-    } else {
-      el = document.createElement('span');
-    }
-    el.className = 'code-session';
-    el.textContent = code;
-    boite.appendChild(el);
+function blocRapprochement(zone, sessions, T) {
+  if (!sessions || !sessions.length) return;
+
+  var produits = {};
+  var montant = 0;
+  sessions.forEach(function (sess) {
+    var cle = OF.texte(champDe(sess, T, 'produit_uid'))
+      || OF.texte(champDe(sess, T, 'produit_nom')) || '(inconnu)';
+    produits[cle] = true;
+    montant += nombre(champDe(sess, T, 'vendu'));
   });
-  td.appendChild(boite);
-  if (sessions.length > 6) {
-    var p = document.createElement('div');
-    p.className = 'second';
-    p.textContent = '+ ' + (sessions.length - 6) + ' autres';
-    td.appendChild(p);
+  var n = Object.keys(produits).length;
+
+  var d = document.createElement('div');
+  d.className = 'bloc-rapprochement';
+
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc';
+  p.innerHTML = '<b>' + OF.plur(n, 'produit SmartOF') + '</b> '
+    + OF.accord(n, 'n\'est', 'ne sont') + ' pas rapproché' + (n > 1 ? 's' : '')
+    + ' du catalogue cette année, pour ' + OF.eur(montant) + ' de vendu. Ce montant compte '
+    + 'dans les totaux, mais ne se rattache à aucune formation : il manque donc dans le '
+    + 'tableau ci-dessus.';
+  d.appendChild(p);
+
+  var ou = document.createElement('p');
+  ou.className = 'note';
+  var page = parametreTexte(CLE_PAGE_SMARTOF);
+  if (page) {
+    ou.innerHTML = 'Le rapprochement se fait en une seule fois, pour toutes les années, dans '
+      + 'le widget SmartOF — section « La liaison avec le catalogue », avec les numéros de '
+      + 'session et les liens pour aller vérifier : <a href="' + OF.echappe(page)
+      + '" target="_blank" rel="noopener noreferrer">ouvrir cette page</a>.';
+    d.appendChild(ou);
+  } else {
+    ou.innerHTML = 'Le rapprochement se fait en une seule fois, pour toutes les années, dans '
+      + 'le widget <b>SmartOF</b> — section « La liaison avec le catalogue ». Collez ici '
+      + 'l\'adresse de la page Grist qui le porte, et le lien sera direct la prochaine fois.';
+    d.appendChild(ou);
+    d.appendChild(saisiePageSmartOF());
   }
-  return td;
+  zone.appendChild(d);
 }
 
 /* ---------------------------------------------- le rythme d'une année --- */
@@ -2683,10 +2617,52 @@ function noteExclusions(zone, tri, contexte) {
 var VIDE = { sessions: 0, places: 0, vendu: 0, facture: 0, reste: 0 };
 var REALISE_CACHE = null;
 
+/* LE FACTURÉ NE VIENT PLUS DE LA COLONNE DE SESSION
+   `SmartOF_sessions.facture_ht` est posée par le script, qui excluait les
+   factures archivées. Cette règle est fausse : archiver une facture la range,
+   ne l'annule pas. La colonne sous-estime donc le facturé, et la corriger
+   demanderait de repasser le script.
+
+   On additionne donc les factures elles-mêmes — montant, avoirs et statut
+   sont des colonnes du document, on ne fait que grouper et appliquer la règle
+   une fois, au même endroit pour tout l'écran. Sans table de factures, on
+   retombe sur la colonne de session, et on le dit. */
+function sourceFacture() {
+  var Tf = tableProche('SmartOF_factures');
+  var Ts = tableSessions();
+  return (Tf && Ts && OF.table(Tf).length) ? 'factures' : 'sessions';
+}
+
+function factureParAnneeDepuisFactures() {
+  var Tf = tableProche('SmartOF_factures');
+  var Ts = tableSessions();
+  var SY = window.SmartOFSync;
+  var compte = SY ? SY.factureCompte : function () { return true; };
+  var anneeDeSession = {};
+  OF.table(Ts).forEach(function (sess) {
+    anneeDeSession[OF.texte(champDe(sess, Ts, 'uid'))] = champDe(sess, Ts, 'annee');
+  });
+  var par = {}, parStatut = {}, horsAnnee = 0, annulees = 0;
+  OF.table(Tf).forEach(function (f) {
+    var net = nombre(f.montant_ht) - nombre(f.avoirs);
+    var st = OF.texte(f.statut) || '(sans statut)';
+    var e = parStatut[st] = parStatut[st] || { montant: 0, nombre: 0, compte: compte(f) };
+    e.montant += net; e.nombre++;
+    if (!compte(f)) { annulees += net; return; }
+    var idA = anneeDeSession[OF.texte(f.session_uid)];
+    if (!idA) { horsAnnee += net; return; }
+    par[idA] = (par[idA] || 0) + net;
+  });
+  return { par: par, parStatut: parStatut, horsAnnee: horsAnnee, annulees: annulees };
+}
+
+var FACTURE_DETAIL = null;
 function realiseParAnnee() {
   if (REALISE_CACHE) return REALISE_CACHE;
   var tri = triSessions(null);
   var T = tri.table;
+  var depuisFactures = sourceFacture() === 'factures';
+  FACTURE_DETAIL = depuisFactures ? factureParAnneeDepuisFactures() : null;
   var par = {};
   if (T) {
     tri.retenues.forEach(function (sess) {
@@ -2696,12 +2672,80 @@ function realiseParAnnee() {
       c.sessions++;
       c.places += nombre(champDe(sess, T, 'places_vendues'));
       c.vendu += nombre(champDe(sess, T, 'vendu'));
-      c.facture += nombre(champDe(sess, T, 'facture_ht'));
+      if (!depuisFactures) c.facture += nombre(champDe(sess, T, 'facture_ht'));
+    });
+  }
+  if (depuisFactures) {
+    Object.keys(FACTURE_DETAIL.par).forEach(function (idA) {
+      var c = par[idA] = par[idA] || { sessions: 0, places: 0, vendu: 0, facture: 0 };
+      c.facture = FACTURE_DETAIL.par[idA];
     });
   }
   Object.keys(par).forEach(function (k) { par[k].reste = par[k].vendu - par[k].facture; });
   REALISE_CACHE = par;
   return par;
+}
+
+/* LE FACTURÉ, STATUT PAR STATUT
+   La règle « compte sauf si annulée » repose sur un vocabulaire de statuts
+   que la documentation ne fixe pas. Plutôt que de l'affirmer, on montre ce
+   que chaque statut porte : si un statut exclu pèse lourd, ou si un statut
+   compté ne devrait pas l'être, cela se voit en une ligne. */
+function detailStatuts(zone) {
+  if (!FACTURE_DETAIL) return;
+  var st = FACTURE_DETAIL.parStatut;
+  var cles = Object.keys(st).sort(function (a, b) { return st[b].montant - st[a].montant; });
+  if (!cles.length) return;
+
+  var det = document.createElement('details');
+  det.className = 'chiffres';
+  var som = document.createElement('summary');
+  som.textContent = 'Le facturé statut par statut, et ce qui est exclu';
+  det.appendChild(som);
+
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.innerHTML = 'Une facture compte <b>sauf si elle est annulée</b>. Une facture '
+    + '<b>archivée compte</b> : archiver la range, ne l\'annule pas. Un avoir ne l\'annule '
+    + 'pas non plus — il se déduit, et c\'est déjà fait dans les montants ci-dessous.';
+  det.appendChild(p);
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Statut</th><th class="calcule">Factures</th>'
+    + '<th>Net HT</th><th class="gauche">Comptée ?</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  cles.forEach(function (k) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = k;
+    tr.appendChild(td);
+    [[OF.ent(st[k].nombre), 'calcul calcule'], [OF.eur(st[k].montant), 'calcul']]
+      .forEach(function (x) {
+        var c = document.createElement('td');
+        c.className = x[1]; c.textContent = x[0]; tr.appendChild(c);
+      });
+    var tc = document.createElement('td');
+    tc.className = 'gauche';
+    tc.innerHTML = st[k].compte ? 'oui'
+      : '<span class="negatif">non — lue comme annulée</span>';
+    tr.appendChild(tc);
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  det.appendChild(defilant(t));
+
+  var q = document.createElement('p');
+  q.className = 'aide';
+  q.textContent = 'Si un statut est classé du mauvais côté, dites-le : la liste des statuts '
+    + 'tenus pour annulés est une seule ligne de code, et c\'est votre vocabulaire qui fait '
+    + 'foi, pas le mien.'
+    + (FACTURE_DETAIL.horsAnnee
+      ? ' ' + OF.eur(FACTURE_DETAIL.horsAnnee) + ' de factures ne se rattachent à aucune '
+        + 'session reprise et n\'entrent dans aucune année.' : '');
+  det.appendChild(q);
+  zone.appendChild(det);
 }
 function realiseDe(a) { return (a && realiseParAnnee()[a.id]) || VIDE; }
 
@@ -2973,8 +3017,17 @@ function realiseSection(zone, annees) {
    Plutôt que de truffer l'écran d'appels à champDe, on recopie une fois les
    valeurs sous les noms que le reste du code attend. */
 var CHAMPS_ANNEE = ['objectif_ca', 'recettes'];
+/* LE DRAPEAU DE NORMALISATION DOIT EXPIRER
+   Il était booléen : posé une fois sur l'enregistrement, il y restait. Or
+   les enregistrements survivent d'un rendu à l'autre — la normalisation ne
+   se rejouait donc jamais, et ce qu'elle calcule au passage (le détail des
+   statuts de facture) restait vide. Le même défaut aurait figé les montants
+   après un rafraîchissement SmartOF sans rechargement de page.
+
+   On le marque donc avec le numéro du rendu : il expire tout seul. */
+var RENDU = 0;
 function normaliserAnnee(a) {
-  if (!a || a.__realiseNormalise) return;
+  if (!a || a.__realiseNormalise === RENDU) return;
   CHAMPS_ANNEE.forEach(function (c) {
     if (a[c] === undefined) {
       var v = champDe(a, 'Annees', c);
@@ -2989,7 +3042,7 @@ function normaliserAnnee(a) {
   a.realise_facture = r.facture;
   a.reste_a_facturer = r.reste;
   a.ecart_vendu = a.recettes ? r.vendu - a.recettes : 0;
-  a.__realiseNormalise = true;
+  a.__realiseNormalise = RENDU;
 }
 
 function realiseAbsent(zone) {
@@ -3804,8 +3857,10 @@ function rendreOnglets() {
 
 function rendre() {
   G.oublier();
+  RENDU++;
   REALISE_CACHE = null;
   VENTILE_CACHE = null;
+  FACTURE_DETAIL = null;
   rendreOnglets();
   var page = OF.$('page');
   page.innerHTML = '';
@@ -3886,7 +3941,10 @@ function demarrer() {
 }
 
 if (typeof window.TEST_SANS_DEMARRAGE === 'undefined') OF.initialiser(TABLES, demarrer);
-window.__pilotage = { demarrer: function () { OF.initialiser(TABLES, demarrer); }, rendre: rendre };
+window.__pilotage = { demarrer: function () { OF.initialiser(TABLES, demarrer); }, rendre: rendre,
+  diag: function () { return { source: sourceFacture(), detail: !!FACTURE_DETAIL,
+    statuts: FACTURE_DETAIL ? Object.keys(FACTURE_DETAIL.parStatut) : null }; } };
+
 </script>
 </body>
 </html>

@@ -297,6 +297,13 @@ function lienSession(uid) {
   if (!u) return null;
   return app() + '/sessions-de-formation/' + encodeURIComponent(u) + '/info/parametres';
 }
+/* La fiche de l'entreprise : c'est elle qu'on ouvre pour reconnaître un
+   établissement dont on n'a qu'un identifiant. */
+function lienEntreprise(uid) {
+  var u = OF.texte(uid).trim();
+  if (!u) return null;
+  return app() + '/entreprises/' + encodeURIComponent(u) + '/info';
+}
 
 var CLE_CHAMP_DATE = 'smartof_champ_date';
 var CHAMPS_DATE = ['updatedAt', 'updated_at', 'lastModifiedAt', 'modifiedAt',
@@ -538,6 +545,36 @@ function sessionVersGrist(s, fiches) {
     archive: archiveVrai(s.archive),
     maj_le: OF.texte(s.updatedAt),
   };
+}
+
+/* UNE FACTURE ARCHIVÉE RESTE UNE FACTURE
+   Première version : les factures archivées étaient exclues du facturé,
+   comme les sessions archivées le sont du vendu. C'était faux. Chez SmartOF,
+   archiver une facture la range, ne l'annule pas — elle reste due et payée.
+   Les exclure retirait du chiffre d'affaires réel, en silence, et le
+   « facturé » affiché était un minimum sans que rien ne le dise.
+
+   La règle est donc : une facture compte, sauf si elle est annulée. Un avoir
+   n'annule pas non plus — il se déduit, ce qui est déjà fait.
+
+   Le vocabulaire exact des statuts n'est pas documenté ici : l'écran affiche
+   donc le facturé statut par statut, pour que la règle se vérifie au lieu de
+   se croire. */
+var STATUTS_ANNULES = ['annule', 'annulee', 'annulées', 'cancelled', 'canceled',
+  'void', 'abandonne', 'abandonnee', 'supprimee', 'supprime'];
+function sansAccentSync(t) {
+  return String(t === null || t === undefined ? '' : t)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function statutAnnule(v) {
+  var t = sansAccentSync(v);
+  if (!t) return false;
+  return STATUTS_ANNULES.some(function (x) { return sansAccentSync(x) === t; });
+}
+/* La seule porte d'entrée pour décider qu'une facture compte. */
+function factureCompte(f) {
+  return !statutAnnule(f && f.statut);
 }
 
 /* ARCHIVÉ OU NON : NE PAS SE FIER À `!!`
@@ -1246,7 +1283,9 @@ racine.SmartOFSync = {
   repriseIncrementalePossible: repriseIncrementalePossible,
   CLE_CHAMP_DATE: CLE_CHAMP_DATE, champDateRetenu: champDateRetenu,
   CLE_APP: CLE_APP, APP_DEFAUT: APP_DEFAUT, app: app, lienSession: lienSession,
+  lienEntreprise: lienEntreprise,
   colonneNomOrg: colonneNomOrg, nomOrganisation: nomOrganisation, clefNom: clefNom,
+  factureCompte: factureCompte, statutAnnule: statutAnnule,
   CHAMPS_DATE: CHAMPS_DATE,
   reglage: reglage, ecrireReglage: ecrireReglage, colonneTexteParametres: colonneTexteParametres,
   base: base, jeton: jeton, configure: configure,
