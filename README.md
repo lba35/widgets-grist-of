@@ -648,6 +648,45 @@ Le **détail par année du pilotage** fait la même chose à l'envers : au lieu 
 session et les liens. Plus un lien vers la page de rapprochement quand son adresse est dans
 `Parametres`, à la clé `page_smartof`.
 
+## Comment le ventilé interne/externe est fabriqué
+
+Quatre maillons, et il suffit qu'un seul manque pour que le facturé tombe dans « pas encore
+qualifié » :
+
+1. **La facture** porte un commanditaire et une session. C'est la session qui donne l'année,
+   pas la date d'émission.
+2. **Le commanditaire** porte un `entreprise_uid`. SmartOF en crée un par session ; le même
+   établissement y revient à chaque fois.
+3. **Une ligne d'`Organisations_clientes`** porte ce même identifiant. *C'est le maillon qui
+   casse.*
+4. **Cette ligne porte le drapeau** Interne ou Externe, qui vaut dès lors pour toutes ses
+   factures.
+
+L'écran de pilotage explique cette chaîne sur place, et compte combien d'entreprises butent sur
+le maillon 3 et combien sur le maillon 4 — quand un chiffre surprend, savoir d'où il vient est
+la première chose qu'on cherche.
+
+### Pourquoi le maillon 3 cassait
+
+Le rattachement reposait sur le **nom** de l'entreprise, lu dans la réponse de l'API. SmartOF ne
+le donne pas là où je l'avais cherché : sur le document du CHU, **une organisation sur deux
+cents** a été rattachée, le reste est resté en UUID à l'écran. Et la version précédente créait
+une ligne par entreprise même sans nom, remplissant la table de lignes qui ne portent qu'un
+identifiant.
+
+Deviner mieux n'était pas la réponse — un faux rattachement envoie du facturé sur le mauvais
+établissement, en silence. Trois corrections :
+
+- **On ne crée plus de ligne sans nom.** Une ligne qui ne porte qu'un UUID n'est pas une
+  organisation. Celles que la version précédente a créées sont détectées et supprimables d'un
+  bouton (identifiant seul, sans nom, sans drapeau, sans catégorie — rien qui se perde).
+- **Un écran de rapprochement**, sur le modèle éprouvé des produits : chaque entreprise SmartOF
+  non rattachée, avec le **destinataire de ses factures** pour la reconnaître, son facturé, ses
+  sessions cliquables, et une liste déroulante des organisations du document. Trié par facturé
+  décroissant : vingt clics couvrent l'essentiel de l'argent.
+- **Les noms viennent des factures** quand le commanditaire n'en porte pas. Un identifiant
+  n'est pas un nom, et on ne demande à personne de traduire un UUID.
+
 ## Ne pas faire saisir ce que le document sait déjà
 
 Le drapeau posé, restait la question qui compte : faut-il requalifier deux cents établissements

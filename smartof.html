@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=42">
+<link rel="stylesheet" href="commun.css?v=43">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,8 +25,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=42"></script>
-<script src="smartof_sync.js?v=42"></script>
+<script src="commun.js?v=43"></script>
+<script src="smartof_sync.js?v=43"></script>
 <script>
 'use strict';
 /* L'écran du widget SmartOF. Tout ce qui parle à l'API et au document vit
@@ -52,7 +52,7 @@ var parcourir = SY.parcourir, curseurDe = SY.curseurDe;
 var parametresDeFenetre = SY.parametresDeFenetre, NOMS_REELS = SY.NOMS_REELS;
 var dernierRapport = null;
 
-var VERSION = 'v42';
+var VERSION = 'v43';
 
 
 /* ------------------------------------------------------------- rendu --- */
@@ -67,6 +67,7 @@ function rendre() {
   }
   if (dernierRapport) page.appendChild(sectionRapport(dernierRapport));
   page.appendChild(sectionCorrespondance());
+  page.appendChild(sectionRapprochementOrgs());
   page.appendChild(sectionOrganisations());
   rendreAvance();
 }
@@ -448,6 +449,333 @@ function sectionCorrespondance() {
     + 'le produit réel sans perdre sa place ici.';
   zone.appendChild(note);
   return zone;
+}
+
+/* RAPPROCHER LES ENTREPRISES SMARTOF DES ORGANISATIONS DU DOCUMENT
+   Le rattachement automatique reposait sur le nom de l'entreprise. L'API ne
+   le donne pas toujours — sur le document du CHU, une seule organisation sur
+   deux cents a été rattachée, et l'écran de pilotage affichait des UUID là
+   où on attend des noms d'hôpitaux. Deviner mieux n'était pas la réponse :
+   la réponse est de montrer ce qu'on sait de chaque entreprise et de laisser
+   trancher, exactement comme pour les produits.
+
+   Ce qu'on sait sans le nom : le destinataire écrit sur ses factures, son
+   facturé, ses sessions. C'est amplement de quoi reconnaître un
+   établissement. Le tri par facturé décroissant fait le reste : vingt clics
+   couvrent l'essentiel de l'argent. */
+function entreprisesSmartOF() {
+  var par = {};
+  var Tc = vraiNom('SmartOF_commanditaires');
+  var Tf = vraiNom('SmartOF_factures');
+  var Ts = vraiNom('SmartOF_sessions');
+
+  OF.table(Tc).forEach(function (c) {
+    var u = OF.texte(c.entreprise_uid);
+    if (!u) return;
+    var e = par[u] = par[u] || { uid: u, nom: '', destinataires: {},
+      sessions: {}, facture: 0, commanditaires: 0 };
+    e.commanditaires++;
+    if (!e.nom) e.nom = OF.texte(c.entreprise_nom);
+    var su = OF.texte(c.session_uid);
+    if (su) e.sessions[su] = true;
+  });
+
+  /* le destinataire d'une facture nomme souvent l'établissement quand le
+     commanditaire ne le fait pas */
+  var entrepriseDe = {};
+  OF.table(Tc).forEach(function (c) {
+    entrepriseDe[OF.texte(c.uid)] = OF.texte(c.entreprise_uid);
+  });
+  OF.table(Tf).forEach(function (f) {
+    if (f.archive) return;
+    var u = entrepriseDe[OF.texte(f.commanditaire_uid)];
+    if (!u || !par[u]) return;
+    var d = OF.texte(f.destinataire).trim();
+    if (d) par[u].destinataires[d] = (par[u].destinataires[d] || 0) + 1;
+    par[u].facture += (typeof f.montant_ht === 'number' ? f.montant_ht : 0)
+      - (typeof f.avoirs === 'number' ? f.avoirs : 0);
+  });
+
+  var parSession = {};
+  OF.table(Ts).forEach(function (x) { parSession[OF.texte(x.uid)] = x; });
+
+  return Object.keys(par).map(function (k) {
+    var e = par[k];
+    var d = Object.keys(e.destinataires).sort(function (a, b) {
+      return e.destinataires[b] - e.destinataires[a];
+    });
+    e.destinataire = d[0] || '';
+    e.autresDestinataires = d.slice(1, 4);
+    e.nbSessions = Object.keys(e.sessions).length;
+    e.exemples = Object.keys(e.sessions).slice(0, 3)
+      .map(function (su) { return parSession[su]; }).filter(Boolean);
+    e.libelle = e.nom || e.destinataire || '';
+    return e;
+  });
+}
+
+function sectionRapprochementOrgs() {
+  var zone = document.createElement('div');
+  var T = vraiNom('Organisations_clientes');
+  if (!T || !OF.colonne(T, 'entreprise_uid').type) return zone;
+
+  var liees = {};
+  OF.table(T).forEach(function (o) {
+    var u = OF.texte(o.entreprise_uid);
+    if (u) liees[u] = o;
+  });
+  var toutes = entreprisesSmartOF();
+  var orphelines = toutes.filter(function (e) { return !liees[e.uid]; })
+    .sort(function (a, b) { return b.facture - a.facture; });
+
+  zone.appendChild(titre('Rapprocher les organisations',
+    'Chaque entreprise de SmartOF doit pointer vers une ligne d\'' + T + ' : c\'est ce '
+    + 'lien qui porte le drapeau interne/externe et la catégorie tarifaire. '
+    + 'Sans lui, le facturé reste « pas encore qualifié ».'));
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  var reste = orphelines.reduce(function (n, e) { return n + e.facture; }, 0);
+  [['Entreprises dans SmartOF', OF.ent(toutes.length), 'vues dans les commanditaires'],
+   ['Rattachées', OF.ent(toutes.length - orphelines.length), 'liées à une organisation'],
+   ['À rattacher', OF.ent(orphelines.length), orphelines.length ? 'triées par facturé' : 'rien en attente'],
+   ['Facturé en attente', OF.eur(reste), 'ni interne ni externe tant que c\'est le cas']
+  ].forEach(function (c, i) {
+    var d = document.createElement('div');
+    d.className = 'tuile';
+    d.innerHTML = '<div class="tuile-lib">' + OF.echappe(c[0]) + '</div>'
+      + '<div class="tuile-val' + ((i === 2 || i === 3) && orphelines.length ? ' negatif' : '')
+      + '">' + OF.echappe(c[1]) + '</div>'
+      + '<div class="tuile-ctx">' + OF.echappe(c[2]) + '</div>';
+    t.appendChild(d);
+  });
+  zone.appendChild(t);
+
+  nettoyerLignesVides(zone, T);
+
+  if (!orphelines.length) return zone;
+
+  boutonPropositionsOrgs(zone, orphelines, T);
+
+  var tab = document.createElement('table');
+  tab.className = 'matrice rappro-orgs';
+  tab.innerHTML = '<thead><tr><th class="gauche">Entreprise SmartOF</th>'
+    + '<th class="calcule">Sessions</th><th>Facturé HT</th>'
+    + '<th class="gauche">Sessions à ouvrir</th>'
+    + '<th class="gauche">Organisation du document</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  var MAX = 60;
+  orphelines.slice(0, MAX).forEach(function (e) {
+    var tr = document.createElement('tr');
+
+    var n = document.createElement('td');
+    n.className = 'gauche libelle';
+    n.textContent = e.libelle || '(sans nom dans SmartOF)';
+    var s2 = document.createElement('div');
+    s2.className = 'second';
+    s2.textContent = e.libelle
+      ? (e.autresDestinataires.length
+          ? 'aussi : ' + e.autresDestinataires.join(' · ')
+          : 'identifiant ' + e.uid.slice(0, 8) + '…')
+      : 'identifiant ' + e.uid;
+    n.appendChild(s2);
+    tr.appendChild(n);
+
+    var ns = document.createElement('td');
+    ns.className = 'calcul calcule';
+    ns.textContent = OF.ent(e.nbSessions);
+    tr.appendChild(ns);
+
+    var mf = document.createElement('td');
+    mf.className = 'calcul';
+    mf.textContent = OF.eur(e.facture);
+    tr.appendChild(mf);
+
+    tr.appendChild(celluleSessions(e.exemples));
+
+    var ch = document.createElement('td');
+    ch.className = 'gauche';
+    ch.appendChild(choixOrganisation(e, T));
+    tr.appendChild(ch);
+    corps.appendChild(tr);
+  });
+  tab.appendChild(corps);
+  zone.appendChild(defilantLocal(tab));
+
+  if (orphelines.length > MAX) {
+    var p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = 'Les ' + MAX + ' plus gros facturés sont affichés ; '
+      + (orphelines.length - MAX) + ' autres suivront une fois ceux-ci traités. '
+      + 'Le tri par montant fait que l\'essentiel de l\'argent se règle en premier.';
+    zone.appendChild(p);
+  }
+
+  var note = document.createElement('p');
+  note.className = 'aide';
+  note.textContent = 'Rattacher une entreprise écrit son identifiant SmartOF sur la ligne '
+    + 'choisie. Le drapeau et la catégorie de cette ligne valent alors pour toutes ses '
+    + 'sessions et toutes ses factures, passées et à venir — c\'est le lien un à plusieurs '
+    + 'qui évite la ressaisie.';
+  zone.appendChild(note);
+  return zone;
+}
+
+/* RÉPARER CE QUE LA VERSION PRÉCÉDENTE A LAISSÉ
+   La v40 créait une ligne par entreprise rencontrée, même sans nom : sur ce
+   document, cela a produit des lignes qui ne portent qu'un UUID. Elles ne
+   désignent rien et encombrent la table. On les repère — un identifiant,
+   aucun nom, aucun drapeau, aucune catégorie — et on propose de les retirer.
+   Jamais d'office : supprimer des lignes sans le demander ne se fait pas. */
+function lignesVides(T) {
+  return OF.table(T).filter(function (o) {
+    return OF.texte(o.entreprise_uid)
+      && !nomOrganisation(o)
+      && !OF.texte(o.facturation)
+      && !o.categorie_tarifaire;
+  });
+}
+
+function nettoyerLignesVides(zone, T) {
+  var vides = lignesVides(T);
+  if (!vides.length) return;
+  var d = document.createElement('div');
+  d.className = 'barre-synchro';
+  var info = document.createElement('span');
+  info.innerHTML = '<b>' + OF.plur(vides.length, 'ligne') + '</b> d\'' + OF.echappe(T)
+    + ' ne '+ OF.accord(vides.length, 'porte', 'portent') + ' qu\'un identifiant SmartOF, '
+    + 'sans nom ni drapeau : '
+    + OF.accord(vides.length, 'créée', 'créées') + ' par une reprise antérieure, '
+    + OF.accord(vides.length, 'elle ne désigne', 'elles ne désignent') + ' rien.';
+  d.appendChild(info);
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Supprimer ' + (vides.length > 1 ? 'ces ' + vides.length + ' lignes' : 'cette ligne');
+  b.addEventListener('click', function () {
+    b.disabled = true;
+    OF.appliquer([['BulkRemoveRecord', T, vides.map(function (o) { return o.id; })]],
+      relire(), function () {
+        OF.signaler(OF.plur(vides.length, 'ligne') + ' '
+          + OF.accord(vides.length, 'supprimée', 'supprimées'));
+        rendre();
+      }).catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
+  });
+  d.appendChild(b);
+  zone.appendChild(d);
+}
+
+/* Le choix : une organisation existante, ou une ligne neuve portant le nom
+   connu de SmartOF. */
+function choixOrganisation(e, T) {
+  var s = document.createElement('select');
+  s.className = 'champ saisie';
+  s.style.width = '100%';
+  s.style.textAlign = 'left';
+
+  var vide = document.createElement('option');
+  vide.value = '';
+  vide.textContent = '— à rattacher —';
+  vide.selected = true;
+  s.appendChild(vide);
+
+  if (e.libelle) {
+    var neuf = document.createElement('option');
+    neuf.value = 'neuf';
+    neuf.textContent = '+ créer « ' + e.libelle + ' »';
+    s.appendChild(neuf);
+  }
+
+  /* les organisations encore libres d'abord : une ligne déjà rattachée à une
+     autre entreprise ne peut pas l'être à celle-ci */
+  var libres = [], prises = [];
+  OF.table(T).forEach(function (o) {
+    (OF.texte(o.entreprise_uid) ? prises : libres).push(o);
+  });
+  var ajouter = function (liste, titre) {
+    if (!liste.length) return;
+    var g = document.createElement('optgroup');
+    g.label = titre;
+    liste.slice().sort(function (a, b) {
+      return (nomOrganisation(a) || '').localeCompare(nomOrganisation(b) || '');
+    }).forEach(function (o) {
+      var op = document.createElement('option');
+      op.value = String(o.id);
+      op.textContent = nomOrganisation(o) || '(ligne ' + o.id + ')';
+      g.appendChild(op);
+    });
+    s.appendChild(g);
+  };
+  ajouter(libres, 'Sans identifiant SmartOF');
+  ajouter(prises, 'Déjà rattachées à une autre entreprise');
+
+  s.addEventListener('change', function () {
+    if (!s.value) return;
+    s.disabled = true;
+    var action = s.value === 'neuf'
+      ? ['AddRecord', T, null, nouvelleOrganisation(e, T)]
+      : ['UpdateRecord', T, +s.value, { entreprise_uid: e.uid }];
+    OF.appliquer([action], relire(), function () { rendre(); })
+      .catch(function (err) { s.disabled = false; OF.signaler(err.message, true); });
+  });
+  return s;
+}
+
+function nouvelleOrganisation(e, T) {
+  var champs = { entreprise_uid: e.uid };
+  var c = SY.colonneNomOrg();
+  if (c) champs[c] = e.libelle;
+  return champs;
+}
+
+/* La proposition : un nom SmartOF qui correspond exactement à une
+   organisation encore libre. On ne propose que l'évident, et on ne l'écrit
+   pas sans qu'on le demande — un faux rattachement envoie du facturé sur le
+   mauvais établissement. */
+function propositionsOrgs(orphelines, T) {
+  var libres = {};
+  OF.table(T).forEach(function (o) {
+    if (OF.texte(o.entreprise_uid)) return;
+    var k = SY.clefNom(nomOrganisation(o));
+    if (!k) return;
+    /* un nom qui désigne deux lignes ne désigne rien : on l'écarte */
+    libres[k] = libres[k] === undefined ? o : null;
+  });
+  return orphelines.map(function (e) {
+    if (!e.libelle) return null;
+    var o = libres[SY.clefNom(e.libelle)];
+    return o ? { e: e, o: o } : null;
+  }).filter(Boolean);
+}
+
+function boutonPropositionsOrgs(zone, orphelines, T) {
+  var liste = propositionsOrgs(orphelines, T);
+  if (!liste.length) return;
+  var d = document.createElement('div');
+  d.className = 'barre-synchro';
+  var info = document.createElement('span');
+  info.innerHTML = '<b>' + OF.plur(liste.length, 'entreprise') + '</b> '
+    + OF.accord(liste.length, 'porte', 'portent') + ' exactement le nom d\'une organisation '
+    + 'sans identifiant : ' + liste.slice(0, 3).map(function (x) {
+        return OF.echappe(x.e.libelle);
+      }).join(' · ') + (liste.length > 3 ? ' …' : '');
+  d.appendChild(info);
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Rattacher ' + (liste.length > 1 ? 'ces ' + liste.length : 'celle-ci');
+  b.addEventListener('click', function () {
+    b.disabled = true;
+    OF.appliquer(liste.map(function (x) {
+      return ['UpdateRecord', T, x.o.id, { entreprise_uid: x.e.uid }];
+    }), relire(), function () {
+      OF.signaler(OF.plur(liste.length, 'entreprise') + ' '
+        + OF.accord(liste.length, 'rattachée', 'rattachées'));
+      rendre();
+    }).catch(function (err) { b.disabled = false; OF.signaler(err.message, true); });
+  });
+  d.appendChild(b);
+  zone.appendChild(d);
 }
 
 /* NE PAS FAIRE SAISIR CE QUE LE DOCUMENT SAIT DÉJÀ

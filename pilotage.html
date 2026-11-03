@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=42">
+<link rel="stylesheet" href="commun.css?v=43">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,9 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=42"></script>
-<script src="graphes.js?v=42"></script>
-<script src="smartof_sync.js?v=42"></script>
+<script src="commun.js?v=43"></script>
+<script src="graphes.js?v=43"></script>
+<script src="smartof_sync.js?v=43"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -48,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v42';
+var VERSION = 'v43';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -225,6 +225,13 @@ function ventilationFacture() {
     var idA = anneeDeSession[OF.texte(f.session_uid)];
     if (!idA) { out.sansSession++; return; }
     var e = entrepriseDe[OF.texte(f.commanditaire_uid)] || '';
+    /* Un identifiant n'est pas un nom. Quand l'entreprise n'a pas de ligne
+       dans le document, le destinataire écrit sur la facture la nomme —
+       c'est ce qui permet de la reconnaître pour aller la rattacher. */
+    if (e && !out.organisations[e]) {
+      var d = OF.texte(f.destinataire).trim();
+      if (d) out.organisations[e] = d + ' (non rattachée)';
+    }
     var panier = drapeau[e] === 'Interne' ? 'interne'
       : (drapeau[e] === 'Externe' ? 'externe' : 'aQualifier');
     var c = out.parAnnee[idA] = out.parAnnee[idA]
@@ -242,6 +249,65 @@ function ventilationFacture() {
 var VENTILE_VIDE = { externe: 0, interne: 0, aQualifier: 0, total: 0, entreprisesFloues: {} };
 function ventileDe(a) {
   return (a && ventilationFacture().parAnnee[a.id]) || VENTILE_VIDE;
+}
+
+/* COMMENT CE VENTILÉ EST FABRIQUÉ
+   La question mérite d'être répondue à l'écran et non dans un fichier :
+   quand un chiffre surprend, savoir d'où il vient est la première chose
+   qu'on cherche, et le maillon qui casse se nomme tout seul. */
+function commentCestFabrique(floues) {
+  var d = document.createElement('div');
+  var det = document.createElement('details');
+  det.className = 'chiffres';
+  var som = document.createElement('summary');
+  som.textContent = 'Comment ce ventilé est fabriqué';
+  det.appendChild(som);
+
+  var p = document.createElement('p');
+  p.className = 'note';
+  p.innerHTML = 'Quatre maillons, et il suffit qu\'un seul manque pour que le facturé '
+    + 'tombe dans « pas encore qualifié » :'
+    + '<br><br>1. <b>La facture</b> porte un commanditaire et une session ; c\'est la '
+    + 'session qui donne l\'année, pas la date d\'émission.'
+    + '<br>2. <b>Le commanditaire</b> porte un identifiant d\'entreprise '
+    + '(<code>entreprise_uid</code>) : SmartOF en crée un par session, le même '
+    + 'établissement y revient à chaque fois.'
+    + '<br>3. <b>Une ligne d\'' + OF.echappe(tableProche('Organisations_clientes')
+        || 'Organisations_clientes') + '</b> doit porter ce même identifiant. '
+    + 'C\'est le maillon qui manque le plus souvent : il se pose dans le widget SmartOF, '
+    + 'section « Rapprocher les organisations ».'
+    + '<br>4. <b>Cette ligne porte le drapeau</b> Interne ou Externe, qui vaut dès lors '
+    + 'pour toutes ses factures, passées et à venir.';
+  det.appendChild(p);
+
+  /* où ça casse, ici et maintenant */
+  var To = tableProche('Organisations_clientes');
+  var Tc = tableProche('SmartOF_commanditaires');
+  var sansLien = 0, sansDrapeau = 0;
+  if (To && Tc) {
+    var liees = {};
+    OF.table(To).forEach(function (o) {
+      var u = OF.texte(o.entreprise_uid);
+      if (u) liees[u] = OF.texte(o.facturation);
+    });
+    (floues || []).forEach(function (e) {
+      if (!(e in liees)) sansLien++;
+      else if (!liees[e]) sansDrapeau++;
+    });
+  }
+  var q = document.createElement('p');
+  q.className = 'note';
+  q.innerHTML = '<b>Sur cette année :</b> ' + OF.plur(sansLien, 'entreprise')
+    + ' ' + OF.accord(sansLien, 'n\'a aucune ligne portant son identifiant',
+        'n\'ont aucune ligne portant leur identifiant')
+    + ' (maillon 3), et ' + OF.plur(sansDrapeau, 'autre')
+    + ' ' + OF.accord(sansDrapeau, 'en a une mais sans drapeau', 'en ont une mais sans drapeau')
+    + ' (maillon 4).'
+    + (sansLien ? ' Le rapprochement est donc le premier geste, et il est trié par montant : '
+        + 'les plus gros facturés d\'abord.' : '');
+  det.appendChild(q);
+  d.appendChild(det);
+  return d;
 }
 
 /* Le ventilé d'une année, en trois barres et une phrase. */
@@ -314,12 +380,12 @@ function sectionFactureVentile(zone, a) {
     var l = document.createElement('p');
     l.className = 'note';
     l.innerHTML = floues.slice(0, 8).map(function (e) {
-      return OF.echappe(ventilationFacture().organisations[e] || e || '(sans organisation)')
+      var n = ventilationFacture().organisations[e];
+      return OF.echappe(n || (e ? 'entreprise ' + e.slice(0, 8) + '…' : '(sans organisation)'))
         + ' — ' + OF.eur(v.entreprisesFloues[e]);
-    }).join('<br>') + (floues.length > 8 ? '<br>… et ' + (floues.length - 8) + ' autres' : '')
-      + '<br><br>Le drapeau se pose dans le widget SmartOF, section « Facturation interne '
-      + 'ou externe » : une fois par organisation, pour toutes ses sessions.';
+    }).join('<br>') + (floues.length > 8 ? '<br>… et ' + (floues.length - 8) + ' autres' : '');
     zone.appendChild(l);
+    zone.appendChild(commentCestFabrique(floues));
   }
 
   if (ventilationFacture().sansSession) {

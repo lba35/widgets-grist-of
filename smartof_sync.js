@@ -753,11 +753,17 @@ function factureVersGrist(f) {
    premier qui existe plutôt que de parier sur une forme. */
 function nomEntreprise(c) {
   if (!c) return '';
-  var pistes = [c.nom, c.entrepriseNom,
+  var pistes = [c.nom, c.entrepriseNom, c.raisonSociale,
     c.entreprise && c.entreprise.nom,
+    c.entreprise && c.entreprise.raisonSociale,
     c.entreprise && c.entreprise.meta && c.entreprise.meta.nom,
+    c.entreprise && c.entreprise.meta && c.entreprise.meta.raisonSociale,
     c.meta && c.meta.nom,
-    c.meta && c.meta.nomDuCommanditaire];
+    c.meta && c.meta.raisonSociale,
+    c.meta && c.meta.nomDuCommanditaire,
+    c.meta && c.meta.nomDuDestinataire,
+    c.organisation && c.organisation.nom,
+    c.client && c.client.nom];
   for (var i = 0; i < pistes.length; i++) {
     var v = OF.texte(pistes[i]).trim();
     if (v) return v;
@@ -857,7 +863,7 @@ function rapprocherOrganisations(commanditaires, bilan) {
     if (k && !parNom[k]) parNom[k] = l;
   });
 
-  var actions = [], ajoutees = 0, rattachees = 0;
+  var actions = [], ajoutees = 0, rattachees = 0, sansNom = 0;
   entreprisesDe(commanditaires).forEach(function (e) {
     if (parUid[e.entreprise_uid]) { bilan.inchangees++; return; }
     var deja = e.nom ? parNom[clefNom(e.nom)] : null;
@@ -870,8 +876,16 @@ function rapprocherOrganisations(commanditaires, bilan) {
       rattachees++;
       return;
     }
+    /* SANS NOM, ON N'AJOUTE RIEN
+       Une ligne qui ne porte qu'un identifiant n'est pas une organisation :
+       c'est une ligne vide avec un UUID dedans. En créer deux cents a rendu
+       la table illisible et l'écran incompréhensible — des UUID partout là
+       où on attend des noms d'hôpitaux. Ces entreprises-là se rattachent à
+       la main, dans la section de rapprochement, où elles sont présentées
+       avec leur facturé et le destinataire de leurs factures. */
+    if (!e.nom) { sansNom++; return; }
     var neuf = { entreprise_uid: e.entreprise_uid };
-    if (colNom && e.nom) neuf[colNom] = e.nom;
+    if (colNom) neuf[colNom] = e.nom;
     actions.push(['AddRecord', T, null, restreindre(T, neuf, bilan)]);
     ajoutees++;
   });
@@ -889,6 +903,15 @@ function rapprocherOrganisations(commanditaires, bilan) {
       + 'existe déjà sous une autre orthographe, fusionnez les deux lignes — le '
       + 'rapprochement automatique ne devine pas, pour ne pas ventiler le facturé '
       + 'sur le mauvais établissement. Leur facturation reste à qualifier.');
+  }
+  if (sansNom) {
+    bilan.avertissements.push(OF.plur(sansNom, 'entreprise') + ' de SmartOF '
+      + OF.accord(sansNom, 'n\'a', 'n\'ont') + ' pas de nom exploitable dans l\'API : '
+      + OF.accord(sansNom, 'elle n\'a', 'elles n\'ont') + ' pas été '
+      + OF.accord(sansNom, 'ajoutée', 'ajoutées') + ' pour ne pas remplir ' + T
+      + ' de lignes sans intitulé. Elles se rattachent dans la section '
+      + '« Rapprocher les organisations », où leur facturé et le destinataire de leurs '
+      + 'factures permettent de les reconnaître.');
   }
   bilan.ajoutees += ajoutees;
   bilan.corrigees += rattachees;
