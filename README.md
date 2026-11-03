@@ -607,6 +607,31 @@ Le bilan reste affiché après le redessin : lignes lues, ajoutées, corrigées,
 avertissements en entier — un produit non rapproché doit se dire là, sinon on ira chercher les
 montants manquants ailleurs.
 
+## Mise à jour du document : aucun script
+
+Les versions précédentes demandaient de coller un script dans la console Grist. Plus
+maintenant : le bouton **« Créer ces N colonnes »** du widget SmartOF pose tout ce que la
+version attend, et il crée les colonnes qu'il peut même si une table manque — il nomme alors
+celles qui restent à créer à la main, au lieu de tout refuser avec un bouton qui annonce
+quatre colonnes et n'en crée aucune.
+
+Ce que la v40 ajoute au document :
+
+| Table | Colonne | Type |
+|---|---|---|
+| `Organisations_clientes` | `entreprise_uid` | Text |
+| `Organisations_clientes` | `facturation` | Choice — *Interne*, *Externe* |
+| `Organisations_clientes` | `categorie_tarifaire` | Ref vers `Categories_tarifaires` |
+| `SmartOF_commanditaires` | `entreprise_nom` | Text |
+
+Puis une **reprise complète** depuis SmartOF, le temps que les identifiants d'entreprise
+descendent sur les lignes existantes. Ensuite, l'incrémental suffit.
+
+Les deux réglages d'adresse n'ont pas de script non plus : `smartof_app` a un champ dans la
+section Connexion, et `page_smartof` se saisit depuis le pilotage, à l'endroit exact où son
+absence se remarque — demander d'aller créer une ligne dans `Parametres` à la main, c'est
+demander à l'utilisateur de faire le travail du widget.
+
 ## Aller voir la session dans SmartOF
 
 Rapprocher un produit sur son seul intitulé est inconfortable : ce sont les sessions qui disent

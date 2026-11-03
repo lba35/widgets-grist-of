@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=40">
+<link rel="stylesheet" href="commun.css?v=41">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,9 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=40"></script>
-<script src="graphes.js?v=40"></script>
-<script src="smartof_sync.js?v=40"></script>
+<script src="commun.js?v=41"></script>
+<script src="graphes.js?v=41"></script>
+<script src="smartof_sync.js?v=41"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -48,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v40';
+var VERSION = 'v41';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -2244,12 +2244,71 @@ function blocRapprochement(zone, sessions, T) {
       + 'écrasé par un rafraîchissement.';
   } else {
     ou.innerHTML = 'Le rapprochement se fait dans le widget <b>SmartOF</b>, section « La '
-      + 'liaison avec le catalogue ». Pour avoir un lien direct ici, collez l\'adresse de '
-      + 'cette page Grist dans <code>Parametres</code>, à la clé <code>'
-      + CLE_PAGE_SMARTOF + '</code>.';
+      + 'liaison avec le catalogue ». Collez ici l\'adresse de la page Grist qui le porte, '
+      + 'et le lien sera direct la prochaine fois.';
+    d.appendChild(ou);
+    d.appendChild(saisiePageSmartOF());
+    zone.appendChild(d);
+    return;
   }
   d.appendChild(ou);
   zone.appendChild(d);
+}
+
+/* Enregistrer l'adresse de la page de rapprochement, depuis l'endroit où on
+   s'aperçoit qu'elle manque. Demander à l'utilisateur d'aller créer une ligne
+   dans Parametres à la main, c'est lui demander de faire le travail du
+   widget. */
+function saisiePageSmartOF() {
+  var d = document.createElement('div');
+  d.className = 'barre-synchro';
+
+  var ch = document.createElement('input');
+  ch.type = 'url';
+  ch.className = 'champ';
+  ch.style.flex = '1 1 320px';
+  ch.style.textAlign = 'left';
+  ch.placeholder = 'https://grist.numerique.gouv.fr/o/docs/…/p/58';
+  ch.setAttribute('aria-label', 'Adresse de la page du widget SmartOF');
+  d.appendChild(ch);
+
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Enregistrer l\'adresse';
+  d.appendChild(b);
+
+  b.addEventListener('click', function () {
+    var v = ch.value.trim();
+    if (!/^https?:\/\//i.test(v)) {
+      ch.classList.add('erreur');
+      OF.signaler('Collez l\'adresse complète de la page, en https', true);
+      return;
+    }
+    ch.classList.remove('erreur');
+    b.disabled = true;
+    ecrireParametre(CLE_PAGE_SMARTOF, v).then(function () {
+      rendre();
+    }).catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
+  });
+  return d;
+}
+
+/* Écrire un réglage dans Parametres : la ligne existe ou se crée.
+   La colonne `texte` est celle qui porte les valeurs non numériques ; sans
+   elle, on le dit plutôt que d'écrire ailleurs. */
+function ecrireParametre(cle, valeur) {
+  if (!OF.colonne('Parametres', 'texte').type) {
+    return Promise.reject(new Error('La table Parametres n\'a pas de colonne « texte » : '
+      + 'le widget SmartOF propose de la créer.'));
+  }
+  var l = OF.table('Parametres').filter(function (x) {
+    return OF.texte(x.cle) === cle;
+  })[0];
+  var action = l
+    ? ['UpdateRecord', 'Parametres', l.id, { texte: valeur }]
+    : ['AddRecord', 'Parametres', null, { cle: cle, texte: valeur }];
+  return OF.appliquer([action], ['Parametres'], function () {});
 }
 
 /* Au plus six numéros : au-delà, la cellule devient un mur. */

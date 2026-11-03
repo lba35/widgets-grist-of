@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=40">
+<link rel="stylesheet" href="commun.css?v=41">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,8 +25,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=40"></script>
-<script src="smartof_sync.js?v=40"></script>
+<script src="commun.js?v=41"></script>
+<script src="smartof_sync.js?v=41"></script>
 <script>
 'use strict';
 /* L'écran du widget SmartOF. Tout ce qui parle à l'API et au document vit
@@ -52,7 +52,7 @@ var parcourir = SY.parcourir, curseurDe = SY.curseurDe;
 var parametresDeFenetre = SY.parametresDeFenetre, NOMS_REELS = SY.NOMS_REELS;
 var dernierRapport = null;
 
-var VERSION = 'v40';
+var VERSION = 'v41';
 
 
 /* ------------------------------------------------------------- rendu --- */
@@ -757,11 +757,14 @@ function choixFormation(p) {
 function creerCeQuiManque(bouton) {
   var manque = colonnesManquantes();
   var tablesAbsentes = manque.filter(function (m) { return !m[1]; });
+  /* Faire ce qu'on peut, et nommer le reste. Refuser toutes les colonnes
+     parce qu'une table manque laissait un bouton qui annonce « créer ces 4
+     colonnes » et n'en crée aucune — le pire des deux mondes. */
   if (tablesAbsentes.length) {
-    OF.signaler('Tables absentes : ' + tablesAbsentes.map(function (m) { return m[0]; }).join(', ')
-      + ' — à créer dans le document', true);
-    return;
+    OF.signaler(OF.plur(tablesAbsentes.length, 'table') + ' à créer à la main dans le '
+      + 'document : ' + tablesAbsentes.map(function (m) { return m[0]; }).join(', '), true);
   }
+  manque = manque.filter(function (m) { return !!m[1]; });
   /* Une colonne Choice créée sans ses choix s'affiche comme un champ libre :
      on les pose en même temps, sinon la saisie n'est pas guidée et les
      valeurs partent dans tous les sens. */
@@ -775,7 +778,10 @@ function creerCeQuiManque(bouton) {
     }
     return ['AddVisibleColumn', m[0], m[1][0], opts];
   });
-  if (!actions.length) { OF.signaler('Rien à créer : toutes les colonnes existent'); return; }
+  if (!actions.length) {
+    if (!tablesAbsentes.length) OF.signaler('Rien à créer : toutes les colonnes existent');
+    return;
+  }
   bouton.disabled = true;
   OF.appliquer(actions, [], function () {
     OF.chargerColonnes().then(function () {
