@@ -13,9 +13,11 @@
 'use strict';
 
 var TABLES = ['Parametres', 'Formations', 'Annees',
-  'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures'];
+  'SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires',
+  'SmartOF_factures', 'Organisations_clientes'];
 function relire() {
-  return ['SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires', 'SmartOF_factures']
+  return ['SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires',
+    'SmartOF_factures', 'Organisations_clientes']
     .map(vraiNom).concat(['Parametres']);
 }
 
@@ -276,6 +278,26 @@ function repriseIncrementalePossible() {
    `aucun` est une réponse valable : si aucun champ n'est filtrable, la reprise
    incrémentale n'existe pas chez ce fournisseur, et il vaut mieux l'écrire que
    réessayer neuf appels à chaque fois. */
+/* L'ADRESSE DE L'APPLICATION, QUI N'EST PAS CELLE DE L'API
+   L'API répond sur une fonction cloud ; les humains, eux, ouvrent
+   chu-rennes.smartof.app. On ne peut pas déduire l'une de l'autre, donc
+   l'adresse de l'application est un réglage à part, avec une valeur par
+   défaut qui couvre le cas du CHU. */
+var CLE_APP = 'smartof_app';
+var APP_DEFAUT = 'https://chu-rennes.smartof.app';
+
+function app() {
+  var v = reglage(CLE_APP).trim().replace(/\/+$/, '');
+  return v || APP_DEFAUT;
+}
+/* Le lien vers une session dans SmartOF. Null si l'identifiant manque :
+   mieux vaut pas de lien qu'un lien mort. */
+function lienSession(uid) {
+  var u = OF.texte(uid).trim();
+  if (!u) return null;
+  return app() + '/sessions-de-formation/' + encodeURIComponent(u) + '/info/parametres';
+}
+
 var CLE_CHAMP_DATE = 'smartof_champ_date';
 var CHAMPS_DATE = ['updatedAt', 'updated_at', 'lastModifiedAt', 'modifiedAt',
   'dateModification', 'date_modification', 'createdAt', 'created_at'];
@@ -387,10 +409,28 @@ var SCHEMAS = {
     ['avoirs', 'Numeric', 'Avoirs'],
     ['archive', 'Bool', 'Archivée'],
   ],
+  /* UNE LIGNE PAR ENTREPRISE, PAS PAR SESSION
+     SmartOF crée un commanditaire par session : le même établissement y
+     revient à chaque fois. Le caractère interne ou externe d'une facturation,
+     lui, est une propriété de l'établissement — on le pose une fois ici, et
+     toutes ses sessions en héritent. C'est le lien un à plusieurs qui fait
+     tout le travail.
+
+     `facturation` est saisi à la main et n'est jamais réécrit par la synchro,
+     exactement comme le rapprochement d'un produit au catalogue. */
+  /* On n'exige que les deux colonnes qu'on ajoute : le libellé de
+     l'organisation existe déjà dans le document, sous un nom qui lui est
+     propre, et on le lit tel quel plutôt que d'en imposer un. */
+  Organisations_clientes: [
+    ['entreprise_uid', 'Text', 'Identifiant SmartOF de l\'entreprise'],
+    ['facturation', 'Choice', 'Facturation'],
+    ['categorie_tarifaire', 'Ref:Categories_tarifaires', 'Catégorie tarifaire'],
+  ],
   SmartOF_commanditaires: [
     ['uid', 'Text', 'Identifiant SmartOF'],
     ['session_uid', 'Text', 'Session'],
     ['entreprise_uid', 'Text', 'Entreprise'],
+    ['entreprise_nom', 'Text', 'Organisation'],
     ['type', 'Text', 'Type'],
     ['nb_apprenants', 'Int', 'Apprenants inscrits'],
     ['budget', 'Numeric', 'Budget'],
@@ -425,6 +465,36 @@ function tablesVoisines() {
   var prises = Object.keys(NOMS_REELS).map(function (t) { return NOMS_REELS[t]; });
   return Object.keys(OF.doc.colonnes || {})
     .filter(function (t) { return /smartof/i.test(t) && prises.indexOf(t) < 0; }).sort();
+}
+
+/* TOUT N'EST PAS INDISPENSABLE À LA REPRISE
+   Les organisations servent à ventiler le facturé : c'est un enrichissement,
+   pas le cœur du travail. Bloquer la reprise des sessions et des factures
+   parce qu'une colonne d'enrichissement manque reviendrait à tout arrêter
+   pour un supplément — la même erreur que le filtre de date qui faisait
+   échouer la synchro entière.
+
+   Les colonnes manquantes restent signalées et créables ; seules celles-ci
+   empêchent de tourner. */
+var TABLES_FACULTATIVES = { Organisations_clientes: true };
+/* Certaines colonnes enrichissent une table indispensable sans l'être :
+   le nom de l'entreprise sur un commanditaire sert à l'affichage, le
+   facturé se ventile très bien sans lui. */
+var COLONNES_FACULTATIVES = { entreprise_nom: true };
+function colonnesIndispensables() {
+  return colonnesManquantes().filter(function (m) {
+    var t = nomAttendu(m[0]);
+    if (TABLES_FACULTATIVES[m[0]] || TABLES_FACULTATIVES[t]) return false;
+    return !(m[1] && COLONNES_FACULTATIVES[m[1][0]]);
+  });
+}
+/* Retrouver le nom canonique derrière le nom réel d'une table. */
+function nomAttendu(reel) {
+  var trouve = null;
+  Object.keys(NOMS_REELS).forEach(function (a) {
+    if (NOMS_REELS[a] === reel) trouve = a;
+  });
+  return trouve || reel;
 }
 
 function colonnesManquantes() {
@@ -678,11 +748,159 @@ function factureVersGrist(f) {
   };
 }
 
+/* Le nom lisible d'une entreprise commanditaire. SmartOF le place selon les
+   cas dans `nom`, dans `entreprise.nom` ou dans `meta.nom` : on prend le
+   premier qui existe plutôt que de parier sur une forme. */
+function nomEntreprise(c) {
+  if (!c) return '';
+  var pistes = [c.nom, c.entrepriseNom,
+    c.entreprise && c.entreprise.nom,
+    c.entreprise && c.entreprise.meta && c.entreprise.meta.nom,
+    c.meta && c.meta.nom,
+    c.meta && c.meta.nomDuCommanditaire];
+  for (var i = 0; i < pistes.length; i++) {
+    var v = OF.texte(pistes[i]).trim();
+    if (v) return v;
+  }
+  return '';
+}
+
+/* Les entreprises rencontrées, dédoublonnées par leur identifiant SmartOF.
+   Un même établissement commandite plusieurs sessions : c'est tout l'intérêt
+   de la table. */
+function entreprisesDe(commanditaires) {
+  var par = {};
+  (commanditaires || []).forEach(function (c) {
+    var u = OF.texte(c.entrepriseUid).trim();
+    if (!u) return;
+    var n = nomEntreprise(c);
+    /* le premier nom non vide gagne : certaines lignes ne le portent pas */
+    if (!par[u]) par[u] = { entreprise_uid: u, nom: n };
+    else if (!par[u].nom && n) par[u].nom = n;
+  });
+  return Object.keys(par).map(function (k) { return par[k]; });
+}
+
+/* LE LIBELLÉ D'UNE ORGANISATION, SOUS LE NOM QUE LE DOCUMENT LUI DONNE
+   La table existait avant ce widget : sa colonne de libellé s'appelle
+   `organisation` et non `nom`. On la cherche plutôt que de l'imposer —
+   renommer la colonne d'un document déjà rempli serait une mauvaise façon
+   de se présenter. */
+var COLS_NOM_ORG = ['organisation', 'nom', 'intitule', 'libelle', 'raison_sociale'];
+function colonneNomOrg() {
+  var T = vraiNom('Organisations_clientes');
+  var meta = (OF.doc.colonnes || {})[T] || {};
+  for (var i = 0; i < COLS_NOM_ORG.length; i++) {
+    if (meta[COLS_NOM_ORG[i]]) return COLS_NOM_ORG[i];
+  }
+  var l = OF.table(T)[0];
+  if (l) {
+    for (var k = 0; k < COLS_NOM_ORG.length; k++) {
+      if (COLS_NOM_ORG[k] in l) return COLS_NOM_ORG[k];
+    }
+  }
+  return null;
+}
+function nomOrganisation(l) {
+  var c = colonneNomOrg();
+  return c ? OF.texte(l[c]) : '';
+}
+
+/* RAPPROCHER SANS DUPLIQUER — ET SANS DEVINER
+   Le document contient déjà les organisations, saisies à la main et sans
+   identifiant SmartOF. Créer une ligne par entreprise rencontrée doublerait
+   la table ; on rapproche donc par le nom.
+
+   Mais seulement par une égalité franche, une fois mis de côté les accents,
+   la casse, la ponctuation et les espaces. J'avais d'abord ajouté un
+   dépliage des sigles — CH, CHU, GHT — pour attraper plus de cas : c'était
+   une erreur. « CH Saint-Malo » et « CHU Saint-Malo » ne sont pas le même
+   établissement, et un rapprochement faux est pire qu'un rapprochement
+   manquant : il attache un identifiant à la mauvaise ligne, et tout le
+   facturé part ensuite dans le mauvais panier, en silence.
+
+   Ce qui ne correspond pas exactement devient une ligne neuve, signalée.
+   Fusionner deux lignes est l'affaire d'une minute ; retrouver un ventilé
+   faussé est l'affaire d'un après-midi. */
+function clefNom(t) {
+  return String(t === null || t === undefined ? '' : t)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/* Les actions à appliquer sur la table des organisations : compléter les
+   lignes existantes, n'ajouter que le reste. */
+function organisationsPretes() {
+  var T = NOMS_REELS.Organisations_clientes;
+  if (!T) return false;
+  var meta = (OF.doc.colonnes || {})[T] || {};
+  return !!meta.entreprise_uid;
+}
+
+function rapprocherOrganisations(commanditaires, bilan) {
+  if (!organisationsPretes()) {
+    bilan.avertissements.push('Les organisations clientes n\'ont pas été mises à jour : '
+      + 'la table Organisations_clientes ou sa colonne entreprise_uid manque. Le bouton '
+      + '« créer les colonnes » la prépare ; sans elle, le facturé ne peut pas être '
+      + 'ventilé entre interne et externe.');
+    return [];
+  }
+  var T = vraiNom('Organisations_clientes');
+  var lignes = OF.table(T);
+  var colNom = colonneNomOrg();
+  var parUid = {}, parNom = {};
+  lignes.forEach(function (l) {
+    var u = OF.texte(l.entreprise_uid).trim();
+    if (u) parUid[u] = l;
+    var k = clefNom(nomOrganisation(l));
+    if (k && !parNom[k]) parNom[k] = l;
+  });
+
+  var actions = [], ajoutees = 0, rattachees = 0;
+  entreprisesDe(commanditaires).forEach(function (e) {
+    if (parUid[e.entreprise_uid]) { bilan.inchangees++; return; }
+    var deja = e.nom ? parNom[clefNom(e.nom)] : null;
+    if (deja) {
+      /* la ligne existe sous ce nom : on lui pose l'identifiant, et on ne
+         touche à rien d'autre — surtout pas à ce qui a été saisi à la main */
+      actions.push(['UpdateRecord', T, deja.id,
+        restreindre(T, { entreprise_uid: e.entreprise_uid }, bilan)]);
+      parUid[e.entreprise_uid] = deja;
+      rattachees++;
+      return;
+    }
+    var neuf = { entreprise_uid: e.entreprise_uid };
+    if (colNom && e.nom) neuf[colNom] = e.nom;
+    actions.push(['AddRecord', T, null, restreindre(T, neuf, bilan)]);
+    ajoutees++;
+  });
+
+  if (rattachees) {
+    bilan.avertissements.push(OF.plur(rattachees, 'organisation') + ' du document '
+      + OF.accord(rattachees, 'a été rattachée', 'ont été rattachées')
+      + ' à son identifiant SmartOF par son nom. À vérifier une fois, dans '
+      + T + '.');
+  }
+  if (ajoutees) {
+    bilan.avertissements.push(OF.plur(ajoutees, 'organisation') + ' '
+      + OF.accord(ajoutees, 'a été ajoutée', 'ont été ajoutées') + ' à ' + T
+      + ' : aucun nom du document ne correspondait exactement. Si l\'une d\'elles '
+      + 'existe déjà sous une autre orthographe, fusionnez les deux lignes — le '
+      + 'rapprochement automatique ne devine pas, pour ne pas ventiler le facturé '
+      + 'sur le mauvais établissement. Leur facturation reste à qualifier.');
+  }
+  bilan.ajoutees += ajoutees;
+  bilan.corrigees += rattachees;
+  return actions;
+}
+
 function commanditaireVersGrist(c) {
   return {
     uid: c.commanditaireUid || '',
     session_uid: c.sessionUid || '',
     entreprise_uid: c.entrepriseUid || '',
+    entreprise_nom: nomEntreprise(c),
     type: OF.texte(c.type),
     nb_apprenants: (c.apprenantUids || []).length,
     budget: (lignesTarifaires(c.budget) || {}).ht
@@ -707,6 +925,27 @@ function different(ligne, voulu) {
   });
 }
 
+/* ÉCRIRE SEULEMENT DANS LES COLONNES QUI EXISTENT
+   Une colonne absente faisait échouer l'écriture entière, donc la reprise.
+   C'est la même erreur que le filtre de date qui emportait la synchro : un
+   supplément ne doit jamais faire tomber l'essentiel. On retire les champs
+   sans colonne, et on dit une fois lesquels — pour qu'un champ qui
+   n'arrive jamais ne passe pas inaperçu. */
+function restreindre(table, objet, bilan) {
+  var meta = (OF.doc.colonnes || {})[table];
+  if (!meta || !Object.keys(meta).length) return objet;
+  var out = {}, retires = [];
+  Object.keys(objet).forEach(function (k) {
+    if (meta[k]) out[k] = objet[k];
+    else retires.push(k);
+  });
+  if (retires.length && bilan) {
+    bilan.champsIgnores = bilan.champsIgnores || {};
+    retires.forEach(function (k) { bilan.champsIgnores[table + '.' + k] = true; });
+  }
+  return out;
+}
+
 function fusionner(table, voulus, cle, bilan) {
   var parCle = {};
   OF.table(table).forEach(function (l) {
@@ -717,9 +956,10 @@ function fusionner(table, voulus, cle, bilan) {
   voulus.forEach(function (v) {
     var k = OF.texte(v[cle]);
     if (!k) { bilan.avertissements.push(table + ' : un enregistrement sans identifiant a été ignoré'); return; }
+    var r = restreindre(table, v, bilan);
     var l = parCle[k];
-    if (!l) { actions.push(['AddRecord', table, null, v]); bilan.ajoutees++; return; }
-    if (different(l, v)) { actions.push(['UpdateRecord', table, l.id, v]); bilan.corrigees++; }
+    if (!l) { actions.push(['AddRecord', table, null, r]); bilan.ajoutees++; return; }
+    if (different(l, r)) { actions.push(['UpdateRecord', table, l.id, r]); bilan.corrigees++; }
     else bilan.inchangees++;
   });
   return actions;
@@ -786,10 +1026,12 @@ function rafraichir(options) {
     return Promise.reject(new Error('L\'adresse et la clé SmartOF ne sont pas renseignées : '
       + 'elles se saisissent dans le widget SmartOF, et vivent dans la table Parametres.'));
   }
-  var manque = colonnesManquantes();
+  var manque = colonnesIndispensables();
   if (manque.length) {
     return Promise.reject(new Error('Des colonnes manquent dans le document : '
-      + manque.slice(0, 4).map(function (c) { return c.table + '.' + c.colonne; }).join(', ')
+      + manque.slice(0, 4).map(function (m) {
+          return m[1] ? m[0] + '.' + m[1][0] : 'la table ' + m[0];
+        }).join(', ')
       + (manque.length > 4 ? '…' : '')
       + '. Le widget SmartOF propose de les créer.'));
   }
@@ -886,6 +1128,11 @@ function rafraichir(options) {
         sessions.map(function (s) { return sessionVersGrist(s, fiches); }), 'uid', bilan))
       .concat(fusionner(vraiNom('SmartOF_commanditaires'),
         commanditaires.map(commanditaireVersGrist), 'uid', bilan))
+      /* Les organisations : on rattache par le nom ce qui existe déjà, on
+         n'ajoute que le reste, et on ne touche jamais à `facturation` —
+         c'est une décision humaine, et une synchro ne défait pas une
+         décision humaine. */
+      .concat(rapprocherOrganisations(commanditaires, bilan))
       .concat(factures.length
         ? fusionner(vraiNom('SmartOF_factures'), factures.map(factureVersGrist), 'uid', bilan)
         : []);
@@ -923,7 +1170,10 @@ function rafraichir(options) {
       return ecrireReglage(CLE_DERNIER, bilan.quand);
     }).then(function () {
       return ecrireReglage(CLE_DERNIER_ISO, new Date().toISOString());
-    }).then(function () { enCours = false; dire(''); return bilan; });
+    }).then(function () {
+      direChampsIgnores(bilan);
+      enCours = false; dire(''); return bilan;
+    });
   }).catch(function (e) {
     enCours = false;
     /* Le filtre a été refusé malgré la découverte — le champ retenu a pu
@@ -948,6 +1198,18 @@ function rafraichir(options) {
   });
 }
 
+/* Les champs qu'on n'a pas pu écrire, dits une fois et non à chaque ligne. */
+function direChampsIgnores(bilan) {
+  var l = Object.keys(bilan.champsIgnores || {});
+  if (!l.length) return;
+  bilan.avertissements.push(OF.plur(l.length, 'colonne') + ' '
+    + OF.accord(l.length, 'n\'existe pas', 'n\'existent pas') + ' dans le document et '
+    + OF.accord(l.length, 'n\'a', 'n\'ont') + ' donc pas été '
+    + OF.accord(l.length, 'remplie', 'remplies') + ' : ' + l.slice(0, 6).join(', ')
+    + (l.length > 6 ? '…' : '') + '. Le reste de la reprise est complet ; le bouton '
+    + '« créer les colonnes » les ajoute.');
+}
+
 function quandMaintenant() {
   var d = new Date();
   return d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR').slice(0, 5);
@@ -960,6 +1222,8 @@ racine.SmartOFSync = {
   CLE_DERNIER_ISO: CLE_DERNIER_ISO,
   repriseIncrementalePossible: repriseIncrementalePossible,
   CLE_CHAMP_DATE: CLE_CHAMP_DATE, champDateRetenu: champDateRetenu,
+  CLE_APP: CLE_APP, APP_DEFAUT: APP_DEFAUT, app: app, lienSession: lienSession,
+  colonneNomOrg: colonneNomOrg, nomOrganisation: nomOrganisation, clefNom: clefNom,
   CHAMPS_DATE: CHAMPS_DATE,
   reglage: reglage, ecrireReglage: ecrireReglage, colonneTexteParametres: colonneTexteParametres,
   base: base, jeton: jeton, configure: configure,
@@ -969,6 +1233,7 @@ racine.SmartOFSync = {
   paramCurseur: function () { return paramCurseur; },
   /* structure du document */
   TABLES: TABLES, relire: relire, SCHEMAS: SCHEMAS, resoudreTables: resoudreTables,
+  colonnesIndispensables: colonnesIndispensables, organisationsPretes: organisationsPretes,
   vraiNom: vraiNom, tablesVoisines: tablesVoisines, colonnesManquantes: colonnesManquantes,
   nomsReels: function () { return NOMS_REELS; },
   NOMS_REELS: NOMS_REELS,

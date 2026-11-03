@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=39">
+<link rel="stylesheet" href="commun.css?v=40">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,9 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=39"></script>
-<script src="graphes.js?v=39"></script>
-<script src="smartof_sync.js?v=39"></script>
+<script src="commun.js?v=40"></script>
+<script src="graphes.js?v=40"></script>
+<script src="smartof_sync.js?v=40"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -48,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v39';
+var VERSION = 'v40';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -147,6 +147,341 @@ function tuile(libelle, valeur, contexte, classe) {
     + '<div class="tuile-ctx">' + (contexte || '') + '</div>';
   return d;
 }
+/* LE FACTURÉ VENTILÉ : INTERNE, EXTERNE, ET CE QUI N'EST PAS TRANCHÉ
+   La chaîne est facture → commanditaire → organisation, et le drapeau vit sur
+   l'organisation : posé une fois, il vaut pour toutes ses factures. L'année
+   vient de la session de la facture — pas de sa date d'émission, qui peut
+   tomber l'année suivante.
+
+   Le troisième panier n'est pas une commodité : une organisation non qualifiée
+   doit se voir, sinon un ventilé partiel se lit comme un ventilé complet, et
+   l'externe paraît plus faible qu'il n'est. */
+function facturationDisponible() {
+  var o = tableProche('Organisations_clientes');
+  var f = tableProche('SmartOF_factures');
+  var c = tableProche('SmartOF_commanditaires');
+  return !!(o && f && c && colonneExiste(o, 'facturation'));
+}
+
+var COLS_NOM_ORG = ['organisation', 'nom', 'intitule', 'libelle', 'raison_sociale'];
+function colonneLibelleOrg(T) {
+  if (!T) return null;
+  var meta = (OF.doc.colonnes || {})[T] || {};
+  for (var i = 0; i < COLS_NOM_ORG.length; i++) {
+    if (meta[COLS_NOM_ORG[i]]) return COLS_NOM_ORG[i];
+  }
+  var l = OF.table(T)[0];
+  if (l) {
+    for (var k = 0; k < COLS_NOM_ORG.length; k++) {
+      if (COLS_NOM_ORG[k] in l) return COLS_NOM_ORG[k];
+    }
+  }
+  return null;
+}
+
+var VENTILE_CACHE = null;
+function ventilationFacture() {
+  if (VENTILE_CACHE) return VENTILE_CACHE;
+  var To = tableProche('Organisations_clientes');
+  var Tf = tableProche('SmartOF_factures');
+  var Tc = tableProche('SmartOF_commanditaires');
+  var Ts = tableSessions();
+  var out = { parAnnee: {}, sansSession: 0, organisations: {} };
+  if (!To || !Tf || !Tc || !Ts) { VENTILE_CACHE = out; return out; }
+
+  /* La colonne de libellé porte le nom que le document lui donne — ici
+     `organisation`, ailleurs `nom`. On la cherche plutôt que de l'imposer. */
+  var colNom = colonneLibelleOrg(To);
+  var drapeau = {};
+  OF.table(To).forEach(function (o) {
+    var u = OF.texte(o.entreprise_uid);
+    if (!u) return;
+    var v = OF.texte(o.facturation);
+    drapeau[u] = (v === 'Interne' || v === 'Externe') ? v : '';
+    out.organisations[u] = (colNom ? OF.texte(o[colNom]) : '') || u;
+  });
+
+  var entrepriseDe = {};
+  OF.table(Tc).forEach(function (c) {
+    var u = OF.texte(c.entreprise_uid);
+    entrepriseDe[OF.texte(c.uid)] = u;
+    /* Une entreprise peut n'avoir aucune ligne dans la table : elle est
+       alors inconnue du drapeau, mais le commanditaire, lui, porte son nom.
+       L'afficher évite de renvoyer l'utilisateur vers un identifiant brut
+       qu'il devra aller traduire lui-même. */
+    if (u && !out.organisations[u]) {
+      var n = OF.texte(c.entreprise_nom);
+      if (n) out.organisations[u] = n + ' (absente de la table)';
+    }
+  });
+
+  var anneeDeSession = {};
+  OF.table(Ts).forEach(function (sess) {
+    anneeDeSession[OF.texte(champDe(sess, Ts, 'uid'))] = champDe(sess, Ts, 'annee');
+  });
+
+  OF.table(Tf).forEach(function (f) {
+    if (f.archive) return;
+    var idA = anneeDeSession[OF.texte(f.session_uid)];
+    if (!idA) { out.sansSession++; return; }
+    var e = entrepriseDe[OF.texte(f.commanditaire_uid)] || '';
+    var panier = drapeau[e] === 'Interne' ? 'interne'
+      : (drapeau[e] === 'Externe' ? 'externe' : 'aQualifier');
+    var c = out.parAnnee[idA] = out.parAnnee[idA]
+      || { externe: 0, interne: 0, aQualifier: 0, total: 0, entreprisesFloues: {} };
+    var m = nombre(f.montant_ht) - nombre(f.avoirs);
+    c[panier] += m;
+    c.total += m;
+    if (panier === 'aQualifier' && m) {
+      c.entreprisesFloues[e] = (c.entreprisesFloues[e] || 0) + m;
+    }
+  });
+  VENTILE_CACHE = out;
+  return out;
+}
+var VENTILE_VIDE = { externe: 0, interne: 0, aQualifier: 0, total: 0, entreprisesFloues: {} };
+function ventileDe(a) {
+  return (a && ventilationFacture().parAnnee[a.id]) || VENTILE_VIDE;
+}
+
+/* Le ventilé d'une année, en trois barres et une phrase. */
+function sectionFactureVentile(zone, a) {
+  if (!facturationDisponible()) return;
+  var v = ventileDe(a);
+  if (!v.total) return;
+
+  zone.appendChild(titre('Le facturé, interne ou externe'));
+
+  var paniers = [
+    { cle: 'externe', libelle: 'Facturé à l\'extérieur', couleur: 'var(--serie-1)',
+      quoi: 'organisations marquées Externe' },
+    { cle: 'interne', libelle: 'Facturation interne au CHU', couleur: 'var(--serie-3)',
+      quoi: 'organisations marquées Interne' },
+    { cle: 'aQualifier', libelle: 'Pas encore qualifié', couleur: 'var(--serie-4)',
+      quoi: 'organisations sans drapeau de facturation' }
+  ].filter(function (p) { return v[p.cle]; });
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  paniers.forEach(function (p) {
+    t.appendChild(tuile(p.libelle, OF.eur(v[p.cle]),
+      Math.round(100 * v[p.cle] / v.total) + ' % du facturé ' + a.annee,
+      p.cle === 'aQualifier' ? 'negatif' : ''));
+  });
+  zone.appendChild(t);
+
+  if (paniers.length > 1) {
+    G.figure(zone, {
+      titre: 'Répartition du facturé ' + a.annee,
+      sous: 'Le drapeau vient de l\'organisation cliente, posé une fois pour toutes ses '
+        + 'sessions.',
+      chiffres: G.chiffres('Les chiffres', ['Panier', 'Facturé HT', 'Part', 'Ce que c\'est'],
+        paniers.map(function (p) {
+          return [p.libelle, OF.eur(v[p.cle]),
+            Math.round(100 * v[p.cle] / v.total) + ' %', p.quoi];
+        }).concat([['Ensemble', OF.eur(v.total), '100 %', 'toutes factures de l\'année']])),
+      dessin: function (larg) {
+        return G.barresHorizontales({
+          larg: larg,
+          valeurs: paniers.map(function (p) {
+            return { libelle: p.libelle, valeur: v[p.cle], couleur: p.couleur,
+              bulle: '<b>' + OF.echappe(p.libelle) + '</b><span class="second">'
+                + OF.eur(v[p.cle]) + ' · ' + Math.round(100 * v[p.cle] / v.total)
+                + ' % du facturé</span><span class="second">' + OF.echappe(p.quoi)
+                + '</span>' };
+          }),
+          formatVal: OF.eur,
+          description: 'Facturé ' + a.annee + ' réparti entre externe, interne et non qualifié.'
+        });
+      }
+    });
+  }
+
+  /* Ce qui reste à trancher, nommé : une liste d'organisations se traite,
+     un pourcentage ne se traite pas. */
+  if (v.aQualifier) {
+    var floues = Object.keys(v.entreprisesFloues).sort(function (x, y) {
+      return v.entreprisesFloues[y] - v.entreprisesFloues[x];
+    });
+    var p = document.createElement('p');
+    p.className = 'alerte-bloc';
+    p.innerHTML = '<b>' + OF.eur(v.aQualifier) + '</b> de facturé ne sont ni internes ni '
+      + 'externes : ' + OF.plur(floues.length, 'organisation') + ' '
+      + OF.accord(floues.length, 'n\'a', 'n\'ont') + ' pas encore de drapeau. '
+      + 'Tant qu\'elles n\'en ont pas, l\'externe affiché est un minimum, pas un total.';
+    zone.appendChild(p);
+
+    var l = document.createElement('p');
+    l.className = 'note';
+    l.innerHTML = floues.slice(0, 8).map(function (e) {
+      return OF.echappe(ventilationFacture().organisations[e] || e || '(sans organisation)')
+        + ' — ' + OF.eur(v.entreprisesFloues[e]);
+    }).join('<br>') + (floues.length > 8 ? '<br>… et ' + (floues.length - 8) + ' autres' : '')
+      + '<br><br>Le drapeau se pose dans le widget SmartOF, section « Facturation interne '
+      + 'ou externe » : une fois par organisation, pour toutes ses sessions.';
+    zone.appendChild(l);
+  }
+
+  if (ventilationFacture().sansSession) {
+    var q = document.createElement('p');
+    q.className = 'note';
+    q.textContent = OF.plur(ventilationFacture().sansSession, 'facture')
+      + ' ne se rattache à aucune session reprise : elle n\'entre dans aucune année. '
+      + 'Un rafraîchissement complet depuis SmartOF ramène les sessions manquantes.';
+    zone.appendChild(q);
+  }
+}
+
+/* TARIF APPLIQUÉ, TARIF FACTURÉ
+   Deux prix par place, pour la même catégorie tarifaire : celui que la
+   projection applique — le document l'a calculé depuis la grille — et celui
+   qui sort réellement des factures. L'écart entre les deux est la question :
+   la grille est-elle tenue ?
+
+   Rien de la grille n'est recalculé ici. Le prix projeté vient de
+   `Ventes_inter.recette / nb_places`, deux colonnes du document ; le prix
+   facturé vient des factures et du nombre d'apprenants du commanditaire.
+
+   Pourquoi le commanditaire et non la session : une session peut réunir
+   plusieurs établissements de catégories différentes. Rapporter toutes ses
+   places à une seule catégorie fausserait le prix moyen des deux. Le
+   commanditaire, lui, porte son propre effectif — c'est la bonne maille. */
+function tarifsDisponibles() {
+  var To = tableProche('Organisations_clientes');
+  return !!(To && colonneExiste(To, 'categorie_tarifaire')
+    && OF.table('Categories_tarifaires').length);
+}
+
+function croisementTarifs(a) {
+  var To = tableProche('Organisations_clientes');
+  var Tc = tableProche('SmartOF_commanditaires');
+  var Tf = tableProche('SmartOF_factures');
+  var Ts = tableSessions();
+  var par = {};
+  var entree = function (idCat) {
+    return par[idCat] = par[idCat] || { categorie: idCat,
+      projetRecette: 0, projetPlaces: 0, facture: 0, places: 0, commanditaires: 0 };
+  };
+
+  /* le projeté : ce que le document a calculé, catégorie par catégorie */
+  OF.table('Ventes_inter').forEach(function (v) {
+    if (v.annee !== a.id || !v.categorie) return;
+    var c = entree(v.categorie);
+    c.projetRecette += v.recette || 0;
+    c.projetPlaces += v.nb_places || 0;
+  });
+
+  /* le facturé : par commanditaire, pour ne pas mélanger les catégories
+     d'une même session */
+  if (To && Tc && Tf && Ts) {
+    var catDe = {};
+    OF.table(To).forEach(function (o) {
+      var u = OF.texte(o.entreprise_uid);
+      if (u && o.categorie_tarifaire) catDe[u] = o.categorie_tarifaire;
+    });
+    var anneeDeSession = {};
+    OF.table(Ts).forEach(function (sess) {
+      anneeDeSession[OF.texte(champDe(sess, Ts, 'uid'))] = champDe(sess, Ts, 'annee');
+    });
+    var factureDe = {};
+    OF.table(Tf).forEach(function (f) {
+      if (f.archive) return;
+      var k = OF.texte(f.commanditaire_uid);
+      if (!k) return;
+      factureDe[k] = (factureDe[k] || 0) + nombre(f.montant_ht) - nombre(f.avoirs);
+    });
+    OF.table(Tc).forEach(function (cm) {
+      if (anneeDeSession[OF.texte(cm.session_uid)] !== a.id) return;
+      var idCat = catDe[OF.texte(cm.entreprise_uid)];
+      if (!idCat) return;
+      var m = factureDe[OF.texte(cm.uid)] || 0;
+      if (!m) return;
+      var c = entree(idCat);
+      c.facture += m;
+      c.places += nombre(cm.nb_apprenants);
+      c.commanditaires++;
+    });
+  }
+
+  return Object.keys(par).map(function (k) {
+    var c = par[k];
+    c.nom = nom('Categories_tarifaires', +k, 'Catégorie ' + k);
+    c.prixProjete = c.projetPlaces ? c.projetRecette / c.projetPlaces : null;
+    c.prixFacture = c.places ? c.facture / c.places : null;
+    c.ecart = (c.prixProjete !== null && c.prixFacture !== null)
+      ? c.prixFacture - c.prixProjete : null;
+    return c;
+  }).filter(function (c) { return c.projetRecette || c.facture; })
+    .sort(function (x, y) { return y.facture - x.facture; });
+}
+
+function sectionTarifs(zone, a) {
+  if (!tarifsDisponibles()) return;
+  var lignes = croisementTarifs(a);
+  if (!lignes.length) return;
+  var comparables = lignes.filter(function (c) { return c.ecart !== null; });
+
+  zone.appendChild(titre('Tarif appliqué, tarif facturé'));
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Catégorie tarifaire</th>'
+    + '<th class="calcule">Places projetées</th><th>Projeté</th><th>Prix/place projeté</th>'
+    + '<th>Places facturées</th><th>Facturé</th><th>Prix/place facturé</th>'
+    + '<th>Écart</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  lignes.forEach(function (c) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = c.nom;
+    tr.appendChild(td);
+    [[OF.ent(c.projetPlaces), 'calcul calcule'],
+     [c.projetRecette ? OF.eur(c.projetRecette) : '—', 'calcul'],
+     [c.prixProjete !== null ? OF.eur(c.prixProjete) : '—', 'calcul'],
+     [OF.ent(c.places), 'calcul'],
+     [c.facture ? OF.eur(c.facture) : '—', 'calcul'],
+     [c.prixFacture !== null ? OF.eur(c.prixFacture) : '—', 'calcul'],
+     [c.ecart !== null ? ((c.ecart >= 0 ? '+' : '') + OF.eur(c.ecart)) : '—',
+      'calcul' + (c.ecart === null ? '' : (c.ecart >= 0 ? ' positif' : ' negatif'))]
+    ].forEach(function (x) {
+      var tdc = document.createElement('td');
+      tdc.className = x[1];
+      tdc.textContent = x[0];
+      tr.appendChild(tdc);
+    });
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(defilant(t));
+
+  if (comparables.length) {
+    var sous = comparables.filter(function (c) { return c.ecart < 0; });
+    var v = document.createElement('p');
+    v.className = 'verdict' + (sous.length ? ' tendu' : '');
+    v.innerHTML = sous.length
+      ? '<b>' + OF.plur(sous.length, 'catégorie') + '</b> '
+        + OF.accord(sous.length, 'est facturée', 'sont facturées') + ' sous le prix projeté : '
+        + sous.map(function (c) {
+            return OF.echappe(c.nom) + ' à ' + OF.eur(c.prixFacture) + ' la place contre '
+              + OF.eur(c.prixProjete) + ' prévus';
+          }).join(' ; ') + '.'
+      : 'Les prix facturés tiennent ou dépassent les prix projetés sur '
+        + OF.plur(comparables.length, 'catégorie') + '.';
+    zone.appendChild(v);
+  }
+
+  var n = document.createElement('p');
+  n.className = 'aide';
+  n.textContent = 'Le prix projeté est la recette que le document calcule depuis la grille, '
+    + 'divisée par les places projetées ; rien de la grille n\'est recalculé ici. Le prix '
+    + 'facturé rapporte les factures aux apprenants du commanditaire, et non aux places de '
+    + 'la session : une session peut réunir plusieurs catégories, et les mélanger fausserait '
+    + 'les deux prix. Une catégorie sans prix des deux côtés n\'a pas d\'écart — on ne '
+    + 'compare pas un chiffre à rien.';
+  zone.appendChild(n);
+}
+
 /* LE GESTIONNAIRE D'UNE FORMATION
    La colonne `Formations.gestionnaire` peut être une référence vers une table
    (CESU 35, DFC…) ou un simple texte selon la façon dont le document a été
@@ -1497,6 +1832,8 @@ function pageAnnee(a) {
     zone.appendChild(section('Qui porte, qui décroche',
       'Le vendu face au projeté, formation par formation.'));
     detailFormations(zone, a);
+    sectionFactureVentile(zone, a);
+    sectionTarifs(zone, a);
     sectionGestionnaires(zone, a);
     barreRafraichir(zone);
   } else {
@@ -1767,6 +2104,7 @@ function detailFormations(zone, a) {
   var lignes = Object.keys(par).map(function (k) { return par[k]; });
   if (!lignes.length) { noteExclusions(zone, tri, 'pour ' + a.annee); return; }
   noteExclusions(zone, tri, 'pour ' + a.annee);
+  var aRapprocher = tri.retenues.filter(function (x) { return !champDe(x, T, 'formation'); });
 
   /* le projeté de chaque formation, pour l'année */
   var projete = {};
@@ -1813,6 +2151,139 @@ function detailFormations(zone, a) {
   });
   t.appendChild(corps);
   zone.appendChild(defilant(t));
+  blocRapprochement(zone, aRapprocher, T);
+}
+
+/* RAPPROCHER SANS CHANGER D'ÉCRAN
+   « Produit non rapproché » dans un tableau ne dit pas de quoi il s'agit : ni
+   quel produit, ni quelles sessions. On les nomme ici, avec le lien qui ouvre
+   la session dans SmartOF — c'est en la lisant qu'on sait à quelle formation
+   du catalogue la rattacher. Le choix, lui, se fait dans le widget SmartOF :
+   un lien y mène quand son adresse est connue. */
+var CLE_PAGE_SMARTOF = 'page_smartof';
+function parametreTexte(cle) {
+  var p = OF.table('Parametres').filter(function (x) {
+    return OF.texte(x.cle) === cle;
+  })[0];
+  return p ? OF.texte(p.texte).trim() : '';
+}
+
+function blocRapprochement(zone, sessions, T) {
+  if (!sessions || !sessions.length) return;
+
+  /* une ligne par produit, pas une par session : c'est le produit qui se
+     rapproche, et une même formation revient des dizaines de fois */
+  var parProduit = {};
+  sessions.forEach(function (sess) {
+    var cle = OF.texte(champDe(sess, T, 'produit_uid'))
+      || OF.texte(champDe(sess, T, 'produit_nom')) || '(inconnu)';
+    var c = parProduit[cle] = parProduit[cle]
+      || { nom: OF.texte(champDe(sess, T, 'produit_nom')) || '(sans intitulé)',
+           code: OF.texte(champDe(sess, T, 'code_gesform')), sessions: [], vendu: 0 };
+    c.sessions.push(sess);
+    c.vendu += nombre(champDe(sess, T, 'vendu'));
+  });
+  var produits = Object.keys(parProduit).map(function (k) { return parProduit[k]; })
+    .sort(function (x, y) { return y.vendu - x.vendu; });
+
+  var d = document.createElement('div');
+  d.className = 'bloc-rapprochement';
+
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc';
+  p.innerHTML = '<b>' + OF.plur(produits.length, 'produit SmartOF') + '</b> '
+    + OF.accord(produits.length, 'n\'est', 'ne sont') + ' pas rapproché'
+    + (produits.length > 1 ? 's' : '') + ' du catalogue, pour '
+    + OF.eur(produits.reduce(function (n, x) { return n + x.vendu; }, 0))
+    + ' de vendu. Ce montant compte dans les totaux de l\'année, mais ne se rattache à '
+    + 'aucune formation : il manque donc dans le tableau ci-dessus.';
+  d.appendChild(p);
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Produit SmartOF</th>'
+    + '<th class="gauche">Code Gesform</th><th class="calcule">Sessions</th>'
+    + '<th>Vendu</th><th class="gauche">Ouvrir dans SmartOF</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  produits.forEach(function (c) {
+    var tr = document.createElement('tr');
+    var tdN = document.createElement('td');
+    tdN.className = 'gauche libelle';
+    tdN.textContent = c.nom;
+    tr.appendChild(tdN);
+
+    var tdC = document.createElement('td');
+    tdC.className = 'gauche';
+    tdC.innerHTML = c.code ? '<code>' + OF.echappe(c.code) + '</code>'
+      : '<span class="second">custom_field_20 vide</span>';
+    tr.appendChild(tdC);
+
+    var tdS = document.createElement('td');
+    tdS.className = 'calcul calcule';
+    tdS.textContent = OF.ent(c.sessions.length);
+    tr.appendChild(tdS);
+
+    var tdV = document.createElement('td');
+    tdV.className = 'calcul';
+    tdV.textContent = OF.eur(c.vendu);
+    tr.appendChild(tdV);
+
+    tr.appendChild(celluleLiens(c.sessions, T));
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  d.appendChild(defilant(t));
+
+  var ou = document.createElement('p');
+  ou.className = 'note';
+  var page = parametreTexte(CLE_PAGE_SMARTOF);
+  if (page) {
+    ou.innerHTML = 'Le rapprochement se fait dans le widget SmartOF, section « La liaison '
+      + 'avec le catalogue » : <a href="' + OF.echappe(page) + '" target="_blank" '
+      + 'rel="noopener noreferrer">ouvrir cette page</a>. Un choix fait là-bas n\'est jamais '
+      + 'écrasé par un rafraîchissement.';
+  } else {
+    ou.innerHTML = 'Le rapprochement se fait dans le widget <b>SmartOF</b>, section « La '
+      + 'liaison avec le catalogue ». Pour avoir un lien direct ici, collez l\'adresse de '
+      + 'cette page Grist dans <code>Parametres</code>, à la clé <code>'
+      + CLE_PAGE_SMARTOF + '</code>.';
+  }
+  d.appendChild(ou);
+  zone.appendChild(d);
+}
+
+/* Au plus six numéros : au-delà, la cellule devient un mur. */
+function celluleLiens(sessions, T) {
+  var td = document.createElement('td');
+  td.className = 'gauche';
+  var SY = window.SmartOFSync;
+  var boite = document.createElement('div');
+  boite.className = 'codes-session';
+  sessions.slice(0, 6).forEach(function (sess) {
+    var code = OF.texte(champDe(sess, T, 'custom_id'))
+      || OF.texte(champDe(sess, T, 'nom'))
+      || OF.texte(champDe(sess, T, 'uid')).slice(0, 8);
+    var url = SY ? SY.lienSession(champDe(sess, T, 'uid')) : null;
+    var el;
+    if (url) {
+      el = document.createElement('a');
+      el.href = url; el.target = '_blank'; el.rel = 'noopener noreferrer';
+      el.title = 'Ouvrir cette session dans SmartOF';
+    } else {
+      el = document.createElement('span');
+    }
+    el.className = 'code-session';
+    el.textContent = code;
+    boite.appendChild(el);
+  });
+  td.appendChild(boite);
+  if (sessions.length > 6) {
+    var p = document.createElement('div');
+    p.className = 'second';
+    p.textContent = '+ ' + (sessions.length - 6) + ' autres';
+    td.appendChild(p);
+  }
+  return td;
 }
 
 /* ---------------------------------------------- le rythme d'une année --- */
@@ -3209,6 +3680,7 @@ function rendreOnglets() {
 function rendre() {
   G.oublier();
   REALISE_CACHE = null;
+  VENTILE_CACHE = null;
   rendreOnglets();
   var page = OF.$('page');
   page.innerHTML = '';
@@ -3245,6 +3717,25 @@ function chargerSessionsSmartOF() {
   return OF.charger([t]).catch(function () { return null; });
 }
 
+/* Le ventilé du facturé traverse trois tables : facture → commanditaire →
+   organisation. Aucune n'est dans TABLES, et chacune peut manquer — le
+   chargement ne doit donc jamais faire échouer le démarrage. */
+var TABLES_FACTURE = ['SmartOF_factures', 'SmartOF_commanditaires',
+  'SmartOF_produits', 'Organisations_clientes'];
+function tableProche(attendu) {
+  var connues = Object.keys(OF.doc.colonnes || {});
+  if (connues.indexOf(attendu) >= 0) return attendu;
+  var bas = attendu.toLowerCase();
+  return connues.filter(function (t) { return t.toLowerCase() === bas; })[0] || null;
+}
+function chargerFacturation() {
+  var aCharger = TABLES_FACTURE.map(tableProche).filter(function (t) {
+    return t && TABLES.indexOf(t) < 0 && !OF.table(t).length;
+  });
+  if (!aCharger.length) return Promise.resolve();
+  return OF.charger(aCharger).catch(function () { return null; });
+}
+
 /* La table des gestionnaires n'est pas dans TABLES : son nom dépend du
    document, on le déduit du type de la colonne. */
 function chargerGestionnaires() {
@@ -3257,7 +3748,8 @@ function demarrer() {
   var annees = OF.anneesTriees();
   if (!annees.length) { OF.echouer('Aucune année dans la table Annees.'); return; }
   /* les sessions d'abord : le choix de l'année de départ en dépend */
-  Promise.all([chargerSessionsSmartOF(), chargerGestionnaires()]).then(function () {
+  Promise.all([chargerSessionsSmartOF(), chargerGestionnaires(), chargerFacturation()])
+    .then(function () {
     var d = anneeDeDepart();
     idAnnee = d ? d.id : annees[0].id;
     rendre();

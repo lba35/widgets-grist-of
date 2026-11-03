@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=39">
+<link rel="stylesheet" href="commun.css?v=40">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,8 +25,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=39"></script>
-<script src="smartof_sync.js?v=39"></script>
+<script src="commun.js?v=40"></script>
+<script src="smartof_sync.js?v=40"></script>
 <script>
 'use strict';
 /* L'écran du widget SmartOF. Tout ce qui parle à l'API et au document vit
@@ -34,7 +34,9 @@
    Un seul moteur, donc une seule correction à faire quand l'API bouge. */
 var SY = window.SmartOFSync;
 var CLE_BASE = SY.CLE_BASE, CLE_JETON = SY.CLE_JETON, CLE_DERNIER = SY.CLE_DERNIER;
-var FENETRES = SY.FENETRES, SCHEMAS = SY.SCHEMAS, TABLES = SY.TABLES;
+var FENETRES = SY.FENETRES, SCHEMAS = SY.SCHEMAS;
+/* la grille tarifaire sert aux choix de catégorie sur les organisations */
+var TABLES = SY.TABLES.concat(['Categories_tarifaires']);
 var reglage = SY.reglage, ecrireReglage = SY.ecrireReglage;
 var colonneTexteParametres = SY.colonneTexteParametres;
 var base = SY.base, jeton = SY.jeton, configure = SY.configure;
@@ -44,11 +46,13 @@ var tablesVoisines = SY.tablesVoisines, colonnesManquantes = SY.colonnesManquant
 var indexCatalogue = SY.indexCatalogue, codeGesform = SY.codeGesform;
 var normaliser = SY.normaliser, quandMaintenant = SY.quandMaintenant;
 var CLE_DERNIER_ISO = SY.CLE_DERNIER_ISO;
+var CLE_APP = SY.CLE_APP, lienSession = SY.lienSession;
+var nomOrganisation = SY.nomOrganisation;
 var parcourir = SY.parcourir, curseurDe = SY.curseurDe;
 var parametresDeFenetre = SY.parametresDeFenetre, NOMS_REELS = SY.NOMS_REELS;
 var dernierRapport = null;
 
-var VERSION = 'v39';
+var VERSION = 'v40';
 
 
 /* ------------------------------------------------------------- rendu --- */
@@ -63,6 +67,7 @@ function rendre() {
   }
   if (dernierRapport) page.appendChild(sectionRapport(dernierRapport));
   page.appendChild(sectionCorrespondance());
+  page.appendChild(sectionOrganisations());
   rendreAvance();
 }
 
@@ -96,6 +101,10 @@ function sectionConnexion() {
   g.appendChild(champReglage(CLE_BASE, 'Adresse de l\'API',
     'https://europe-west3-votre-instance.cloudfunctions.net/external/api'));
   g.appendChild(champReglage(CLE_JETON, 'Clé d\'intégration (lecture seule)', 'smk_…', true));
+  /* L'adresse de l'application n'est pas celle de l'API : elle ne sert pas
+     aux appels, seulement aux liens que l'on ouvre à la main. */
+  g.appendChild(champReglage(CLE_APP, 'Adresse de l\'application (pour les liens)',
+    SY.APP_DEFAUT));
   zone.appendChild(g);
 
   var b = document.createElement('div');
@@ -403,10 +412,12 @@ function sectionCorrespondance() {
   if (!orphelins.length) return zone;
 
   var tab = document.createElement('table');
-  tab.className = 'matrice';
+  tab.className = 'matrice correspondance';
   tab.innerHTML = '<thead><tr><th class="gauche">Produit SmartOF</th>'
-    + '<th class="gauche">Code Gesform</th><th class="gauche">Formation du catalogue</th></tr></thead>';
+    + '<th class="gauche">Code Gesform</th><th class="gauche">Sessions concernées</th>'
+    + '<th class="gauche">Formation du catalogue</th></tr></thead>';
   var corps = document.createElement('tbody');
+  var parProduit = sessionsParProduit();
   orphelins.forEach(function (p) {
     var tr = document.createElement('tr');
     var n = document.createElement('td');
@@ -419,6 +430,7 @@ function sectionCorrespondance() {
       ? '<code>' + OF.echappe(OF.texte(p.code_gesform)) + '</code>'
       : '<span class="second">custom_field_20 vide</span>';
     tr.appendChild(c);
+    tr.appendChild(celluleSessions(parProduit[OF.texte(p.produit_uid)]));
     var f = document.createElement('td');
     f.className = 'gauche';
     f.appendChild(choixFormation(p));
@@ -431,9 +443,282 @@ function sectionCorrespondance() {
   var note = document.createElement('p');
   note.className = 'aide';
   note.textContent = 'Un rapprochement fait ici n\'est jamais écrasé par un rafraîchissement '
-    + 'ultérieur : le code Gesform sert à proposer, votre choix tranche.';
+    + 'ultérieur : le code Gesform sert à proposer, votre choix tranche. Les numéros de '
+    + 'session ouvrent la session dans SmartOF, dans un nouvel onglet — de quoi aller lire '
+    + 'le produit réel sans perdre sa place ici.';
   zone.appendChild(note);
   return zone;
+}
+
+/* QUI FACTURE-T-ON : INTERNE OU EXTERNE
+   La question se pose une fois par établissement, pas une fois par session.
+   SmartOF crée pourtant un commanditaire par session : le même hôpital y
+   revient à chaque fois. On range donc le drapeau sur l'entreprise, et toutes
+   ses sessions en héritent — c'est le lien un à plusieurs qui fait le
+   travail, et ce qui rend le facturé ventilable sans ressaisie.
+
+   Ce drapeau n'est jamais réécrit par une synchro : c'est une décision, pas
+   une donnée rapatriée. */
+function sectionOrganisations() {
+  var zone = document.createElement('div');
+  var T = vraiNom('Organisations_clientes');
+  var orgs = OF.table(T);
+  if (!orgs.length) return zone;
+
+  var aQualifier = orgs.filter(function (o) { return !OF.texte(o.facturation); });
+  zone.appendChild(titre('Facturation interne ou externe',
+    'Une ligne par organisation cliente. Le choix fait ici vaut pour toutes ses sessions '
+    + 'et toutes ses factures : c\'est ce qui permet de ventiler le facturé sans le ressaisir.'));
+
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  var compte = function (v) {
+    return orgs.filter(function (o) { return OF.texte(o.facturation) === v; }).length;
+  };
+  [['Organisations', orgs.length, 'rencontrées dans SmartOF'],
+   ['Externes', compte('Externe'), 'facturées hors CHU'],
+   ['Internes', compte('Interne'), 'facturation interne au CHU'],
+   ['À qualifier', aQualifier.length,
+    aQualifier.length ? 'sans drapeau : exclues du ventilé' : 'rien en attente']
+  ].forEach(function (c, i) {
+    var d = document.createElement('div');
+    d.className = 'tuile';
+    d.innerHTML = '<div class="tuile-lib">' + OF.echappe(c[0]) + '</div>'
+      + '<div class="tuile-val' + (i === 3 && c[1] ? ' negatif' : '') + '">' + OF.ent(c[1]) + '</div>'
+      + '<div class="tuile-ctx">' + OF.echappe(c[2]) + '</div>';
+    t.appendChild(d);
+  });
+  zone.appendChild(t);
+
+  if (!OF.doc.metaOk || !OF.colonne(T, 'facturation').type) {
+    var al = document.createElement('p');
+    al.className = 'alerte-bloc';
+    al.innerHTML = 'La colonne <code>facturation</code> manque dans <b>' + OF.echappe(T)
+      + '</b>. Le bouton de création des colonnes, plus haut, la pose avec ses deux choix.';
+    zone.appendChild(al);
+    return zone;
+  }
+
+  /* Ce qui pèse d'abord : une organisation sans drapeau qui porte beaucoup de
+     facturé coûte plus cher à oublier qu'une qui n'a rien. On trie donc par
+     montant facturé décroissant, et non par ordre alphabétique. */
+  var poids = factureParEntreprise();
+  var liste = orgs.slice().sort(function (a, b) {
+    var qa = OF.texte(a.facturation) ? 1 : 0, qb = OF.texte(b.facturation) ? 1 : 0;
+    if (qa !== qb) return qa - qb;
+    return (poids[OF.texte(b.entreprise_uid)] || 0) - (poids[OF.texte(a.entreprise_uid)] || 0);
+  });
+
+  var avecCat = !!OF.colonne(T, 'categorie_tarifaire').type
+    && OF.table('Categories_tarifaires').length;
+  var tab = document.createElement('table');
+  tab.className = 'matrice organisations';
+  tab.innerHTML = '<thead><tr><th class="gauche">Organisation</th>'
+    + '<th class="calcule">Sessions</th><th>Facturé HT</th>'
+    + '<th class="gauche">Facturation</th>'
+    + (avecCat ? '<th class="gauche">Catégorie tarifaire</th>' : '') + '</tr></thead>';
+  var corps = document.createElement('tbody');
+  var sessions = sessionsParEntreprise();
+  liste.forEach(function (o) {
+    var uid = OF.texte(o.entreprise_uid);
+    var tr = document.createElement('tr');
+
+    var n = document.createElement('td');
+    n.className = 'gauche libelle';
+    n.textContent = SY.nomOrganisation(o) || '(sans nom)';
+    if (!SY.nomOrganisation(o)) {
+      var s2 = document.createElement('div');
+      s2.className = 'second';
+      s2.textContent = uid ? 'identifiant ' + uid : 'sans identifiant SmartOF';
+      n.appendChild(s2);
+    }
+    tr.appendChild(n);
+
+    var ns = document.createElement('td');
+    ns.className = 'calcul calcule';
+    ns.textContent = OF.ent((sessions[uid] || []).length);
+    tr.appendChild(ns);
+
+    var mf = document.createElement('td');
+    mf.className = 'calcul';
+    mf.textContent = OF.eur(poids[uid] || 0);
+    tr.appendChild(mf);
+
+    var f = document.createElement('td');
+    f.className = 'gauche';
+    f.appendChild(choixFacturation(o, T));
+    tr.appendChild(f);
+
+    if (avecCat) {
+      var tc = document.createElement('td');
+      tc.className = 'gauche';
+      tc.appendChild(choixCategorie(o, T));
+      tr.appendChild(tc);
+    }
+    corps.appendChild(tr);
+  });
+  tab.appendChild(corps);
+  zone.appendChild(defilantLocal(tab));
+
+  var note = document.createElement('p');
+  note.className = 'aide';
+  note.textContent = 'Les organisations sans drapeau n\'entrent ni dans l\'interne ni dans '
+    + 'l\'externe : elles apparaissent à part dans le pilotage, pour qu\'un ventilé '
+    + 'incomplet ne se lise jamais comme un ventilé complet.';
+  zone.appendChild(note);
+  return zone;
+}
+
+function choixFacturation(o, T) {
+  var s = document.createElement('select');
+  s.className = 'champ saisie';
+  s.style.width = '100%';
+  s.style.textAlign = 'left';
+  var actuel = OF.texte(o.facturation);
+  ['', 'Interne', 'Externe'].forEach(function (v) {
+    var op = document.createElement('option');
+    op.value = v;
+    op.textContent = v || '— à qualifier —';
+    if (v === actuel) op.selected = true;
+    s.appendChild(op);
+  });
+  s.addEventListener('change', function () {
+    var v = s.value || null;
+    s.disabled = true;
+    OF.appliquer([['UpdateRecord', T, o.id, { facturation: v }]], relire(), function () {
+      rendre();
+    }).catch(function (e) { s.disabled = false; OF.signaler(e.message, true); });
+  });
+  return s;
+}
+
+/* LA CATÉGORIE TARIFAIRE DE L'ORGANISATION
+   Le catalogue applique un tarif par catégorie — ANFH, public, privé. La
+   poser ici, sur l'organisation, permet de confronter le tarif prévu pour
+   cette catégorie et le tarif réellement facturé : c'est la seule façon de
+   voir si la grille est tenue, et elle se saisit une fois par établissement
+   plutôt qu'à chaque session. */
+function choixCategorie(o, T) {
+  var s = document.createElement('select');
+  s.className = 'champ saisie';
+  s.style.width = '100%';
+  s.style.textAlign = 'left';
+  var actuel = o.categorie_tarifaire || 0;
+  var vide = document.createElement('option');
+  vide.value = '0';
+  vide.textContent = '— non définie —';
+  if (!actuel) vide.selected = true;
+  s.appendChild(vide);
+  OF.table('Categories_tarifaires').forEach(function (c) {
+    var op = document.createElement('option');
+    op.value = String(c.id);
+    op.textContent = OF.texte(c.intitule) || ('Catégorie ' + c.id);
+    if (c.id === actuel) op.selected = true;
+    s.appendChild(op);
+  });
+  s.addEventListener('change', function () {
+    s.disabled = true;
+    OF.appliquer([['UpdateRecord', T, o.id,
+      { categorie_tarifaire: +s.value || null }]], relire(), function () {
+      rendre();
+    }).catch(function (e) { s.disabled = false; OF.signaler(e.message, true); });
+  });
+  return s;
+}
+
+/* Le facturé rattaché à chaque entreprise : la facture porte le
+   commanditaire, le commanditaire porte l'entreprise. On ne proratise rien. */
+function factureParEntreprise() {
+  var parCommanditaire = {};
+  OF.table(vraiNom('SmartOF_commanditaires')).forEach(function (c) {
+    parCommanditaire[OF.texte(c.uid)] = OF.texte(c.entreprise_uid);
+  });
+  var par = {};
+  OF.table(vraiNom('SmartOF_factures')).forEach(function (f) {
+    if (f.archive) return;
+    var e = parCommanditaire[OF.texte(f.commanditaire_uid)];
+    if (!e) return;
+    par[e] = (par[e] || 0) + (typeof f.montant_ht === 'number' ? f.montant_ht : 0)
+      - (typeof f.avoirs === 'number' ? f.avoirs : 0);
+  });
+  return par;
+}
+
+function sessionsParEntreprise() {
+  var par = {};
+  OF.table(vraiNom('SmartOF_commanditaires')).forEach(function (c) {
+    var e = OF.texte(c.entreprise_uid);
+    if (!e) return;
+    (par[e] = par[e] || []).push(c);
+  });
+  return par;
+}
+
+/* LES SESSIONS DERRIÈRE UN PRODUIT
+   Rapprocher un produit à l'aveugle, sur son seul intitulé, est inconfortable :
+   ce sont les sessions qui disent de quoi il s'agit vraiment. On les donne,
+   avec leur numéro et le lien pour aller voir. */
+function sessionsParProduit() {
+  var par = {};
+  OF.table(vraiNom('SmartOF_sessions')).forEach(function (s) {
+    var u = OF.texte(s.produit_uid);
+    if (!u) return;
+    (par[u] = par[u] || []).push(s);
+  });
+  Object.keys(par).forEach(function (k) {
+    par[k].sort(function (a, b) {
+      return String(a.date_debut || '').localeCompare(String(b.date_debut || ''));
+    });
+  });
+  return par;
+}
+
+/* Au plus six numéros : au-delà, la colonne devient un mur et le nombre
+   total renseigne mieux qu'une énumération. */
+var MAX_SESSIONS_MONTREES = 6;
+function celluleSessions(liste) {
+  var td = document.createElement('td');
+  td.className = 'gauche';
+  if (!liste || !liste.length) {
+    td.innerHTML = '<span class="second">aucune session reprise</span>';
+    return td;
+  }
+  var d = document.createElement('div');
+  d.className = 'codes-session';
+  liste.slice(0, MAX_SESSIONS_MONTREES).forEach(function (s) {
+    d.appendChild(lienVersSession(s));
+  });
+  td.appendChild(d);
+  if (liste.length > MAX_SESSIONS_MONTREES) {
+    var p = document.createElement('div');
+    p.className = 'second';
+    p.textContent = '+ ' + (liste.length - MAX_SESSIONS_MONTREES) + ' autres, sur '
+      + OF.plur(liste.length, 'session') + ' au total';
+    td.appendChild(p);
+  }
+  return td;
+}
+
+/* Le numéro de session, cliquable quand on a l'identifiant. `target="_top"`
+   serait un piège : le widget vit dans une iframe, et on remplacerait le
+   document Grist. Nouvel onglet, donc. */
+function lienVersSession(s) {
+  var code = OF.texte(s.custom_id) || OF.texte(s.nom) || OF.texte(s.uid).slice(0, 8);
+  var url = lienSession(s.uid);
+  if (!url) {
+    var span = document.createElement('span');
+    span.className = 'code-session';
+    span.textContent = code;
+    return span;
+  }
+  var a = document.createElement('a');
+  a.className = 'code-session';
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = code;
+  a.title = 'Ouvrir « ' + (OF.texte(s.nom) || code) + ' » dans SmartOF';
+  return a;
 }
 
 function choixFormation(p) {
@@ -477,8 +762,18 @@ function creerCeQuiManque(bouton) {
       + ' — à créer dans le document', true);
     return;
   }
+  /* Une colonne Choice créée sans ses choix s'affiche comme un champ libre :
+     on les pose en même temps, sinon la saisie n'est pas guidée et les
+     valeurs partent dans tous les sens. */
+  var CHOIX = {
+    facturation: ['Interne', 'Externe'],
+  };
   var actions = manque.map(function (m) {
-    return ['AddVisibleColumn', m[0], m[1][0], { type: m[1][1], label: m[1][2], isFormula: false }];
+    var opts = { type: m[1][1], label: m[1][2], isFormula: false };
+    if (m[1][1] === 'Choice' && CHOIX[m[1][0]]) {
+      opts.widgetOptions = JSON.stringify({ choices: CHOIX[m[1][0]], choiceOptions: {} });
+    }
+    return ['AddVisibleColumn', m[0], m[1][0], opts];
   });
   if (!actions.length) { OF.signaler('Rien à créer : toutes les colonnes existent'); return; }
   bouton.disabled = true;

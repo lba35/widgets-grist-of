@@ -551,6 +551,21 @@ Deux garde-fous : le total recalculé est confronté à la recette du document, 
 signalé — une fourchette assise sur une assiette incomplète ne vaut rien ; et si le remplissage
 projeté tombe hors de la fourchette, l'écran le dit, car elle n'encadre alors plus rien.
 
+## Un supplément ne fait jamais tomber l'essentiel
+
+Trois fois dans ce travail, une fonctionnalité annexe a failli emporter la reprise entière. La
+règle a fini par être écrite dans le code :
+
+| Le supplément | Ce qu'il faisait | Ce qu'il fait |
+|---|---|---|
+| Le filtre de date incrémental | interrompait la synchro sur un `400` | repart sans filtre, et le dit |
+| Une table d'enrichissement absente | refusait de lancer la reprise | la reprise tourne, l'enrichissement est sauté |
+| Une colonne absente | faisait échouer l'écriture | le champ est retiré de l'écriture, et signalé une fois |
+
+Le dernier point est le filet général : avant d'écrire, chaque enregistrement est restreint aux
+colonnes qui existent réellement dans le document. Une colonne ajoutée au widget ne peut donc
+plus casser la reprise de quelqu'un qui ne l'a pas encore créée.
+
 ## Rafraîchir SmartOF depuis le pilotage
 
 Le réalisé se regarde dans le pilotage ; aller le chercher dans un autre widget casse le geste.
@@ -591,6 +606,70 @@ reformater « 02/11/2026 à 23:45 » à l'envers aurait été une source de pann
 Le bilan reste affiché après le redessin : lignes lues, ajoutées, corrigées, inchangées, et les
 avertissements en entier — un produit non rapproché doit se dire là, sinon on ira chercher les
 montants manquants ailleurs.
+
+## Aller voir la session dans SmartOF
+
+Rapprocher un produit sur son seul intitulé est inconfortable : ce sont les sessions qui disent
+de quoi il s'agit. La table de rapprochement porte donc les **numéros de session**, cliquables
+vers `…/sessions-de-formation/<uid>/info/parametres`, dans un nouvel onglet — jamais
+`target="_top"`, qui remplacerait le document Grist par SmartOF.
+
+L'adresse de l'application est un réglage à part (`smartof_app`, par défaut
+`https://chu-rennes.smartof.app`) : l'API répond sur une fonction cloud, les humains ouvrent
+le domaine de l'instance, et l'une ne se déduit pas de l'autre.
+
+Le **détail par année du pilotage** fait la même chose à l'envers : au lieu d'une ligne
+« Produit non rapproché » muette, il nomme les produits en attente, leur vendu, leurs numéros de
+session et les liens. Plus un lien vers la page de rapprochement quand son adresse est dans
+`Parametres`, à la clé `page_smartof`.
+
+## Interne ou externe : le drapeau vit sur l'organisation
+
+SmartOF crée un commanditaire **par session** : le même établissement y revient à chaque fois.
+Poser le caractère interne ou externe de la facturation à cet endroit se re-saisirait
+indéfiniment. Il vit donc sur l'**organisation**, dans `Organisations_clientes`, et toutes ses
+sessions en héritent — c'est le lien un à plusieurs qui fait le travail, et ce qui rend le
+facturé ventilable sans ressaisie.
+
+La table existait déjà, remplie à la main, avec sa propre colonne de libellé (`organisation`) et
+sans identifiant SmartOF. Deux conséquences :
+
+- Le widget **lit le libellé sous le nom que le document lui donne** plutôt que d'imposer `nom` :
+  renommer la colonne d'un document déjà rempli serait une mauvaise façon de se présenter.
+- La synchro **rapproche par le nom** — accents, casse et ponctuation mis de côté — et pose
+  l'identifiant SmartOF sur la ligne existante. Ce qui ne correspond pas exactement devient une
+  ligne neuve, **signalée**.
+
+Sur ce dernier point, un premier jet dépliait les sigles (CH, CHU, GHT) pour attraper plus de
+cas. C'était une erreur, et elle a été retirée : « CH Saint-Malo » et « CHU Saint-Malo » ne sont
+pas le même établissement. Un rapprochement faux est pire qu'un rapprochement manquant — il
+attache un identifiant à la mauvaise ligne, et tout le facturé part ensuite dans le mauvais
+panier, en silence. Fusionner deux lignes est l'affaire d'une minute ; retrouver un ventilé
+faussé est l'affaire d'un après-midi.
+
+Le ventilé a **trois paniers, pas deux** : externe, interne, et *pas encore qualifié*. Le
+troisième n'est pas une commodité — une organisation sans drapeau doit se voir, sinon un ventilé
+partiel se lit comme un ventilé complet et l'externe paraît plus faible qu'il n'est. Le
+pilotage nomme les organisations concernées et leur montant, parce qu'une liste se traite là où
+un pourcentage ne se traite pas.
+
+L'année d'une facture vient de **sa session**, pas de sa date d'émission : une facture de
+décembre peut partir en janvier.
+
+## Tarif appliqué, tarif facturé
+
+La catégorie tarifaire se pose elle aussi sur l'organisation. Deux prix par place deviennent
+alors comparables, pour la même catégorie : celui que la projection applique — le document l'a
+calculé depuis la grille — et celui qui sort réellement des factures.
+
+**Rien de la grille n'est recalculé.** Le prix projeté est `Ventes_inter.recette / nb_places`,
+deux colonnes du document ; le prix facturé rapporte les factures aux apprenants du
+commanditaire.
+
+Le commanditaire, et non la session : une session peut réunir plusieurs établissements de
+catégories différentes, et rapporter toutes ses places à une seule catégorie fausserait les deux
+prix. Une catégorie qui n'a de prix que d'un côté n'a pas d'écart — on ne compare pas un chiffre
+à rien.
 
 ## Qui porte quoi : le regroupement par gestionnaire
 

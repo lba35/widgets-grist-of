@@ -506,3 +506,16 @@ button.lien:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 .barre-synchro .etat-synchro { min-width: 0; flex: 1 1 160px; }
 .rapport-synchro { margin-top: 10px; }
 .rapport-synchro p { margin: 6px 0; }
+
+/* Les numéros de session SmartOF, cliquables vers l'application. */
+.codes-session { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.code-session { display: inline-block; padding: 1px 6px; font-size: 12px;
+  font-variant-numeric: tabular-nums; background: var(--papier);
+  border: 1px solid var(--trait); border-radius: 3px; color: var(--encre);
+  text-decoration: none; white-space: nowrap; }
+a.code-session { color: var(--fait); border-color: var(--trait-fort); }
+a.code-session:hover { background: var(--fait-pale); }
+a.code-session:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
+
+.bloc-rapprochement { margin-top: 18px; }
+.bloc-rapprochement .matrice { margin-top: 12px; }
