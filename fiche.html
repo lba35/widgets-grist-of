@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=44">
+<link rel="stylesheet" href="commun.css?v=45">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -23,6 +23,7 @@
   <div class="corps">
     <div class="colonne-rail">
       <div class="filtre-rail" id="filtre-rail" hidden></div>
+      <div class="ajout-rail" id="ajout-rail"></div>
       <div class="rail" id="rail" role="list"></div>
     </div>
     <div class="fiche" id="fiche"><p class="vide">Chargement du document…</p></div>
@@ -30,7 +31,7 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=44"></script>
+<script src="commun.js?v=45"></script>
 <script>
 /* =========================================================================
    Fiche formation — définition, intervenants et projections au même endroit.
@@ -45,7 +46,7 @@
 /* Écrit dans le bandeau du haut. Une page servie depuis le cache affiche
    l'ancien numéro : on sait tout de suite si le fichier déposé est bien
    celui qui tourne, sans avoir à lire le code source. */
-var VERSION = 'v44';
+var VERSION = 'v45';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra', 'Segments',
   'Segments_categories', 'Categories_tarifaires', 'Domaines', 'Sous_domaines', 'Typologies',
@@ -472,7 +473,115 @@ function majItem(b, f) {
   else b.removeAttribute('aria-current');
 }
 
+/* CRÉER UNE FORMATION QUI N'EXISTE PAS ENCORE
+   Jusqu'ici, il fallait quitter le widget, ouvrir la table Formations et
+   ajouter une ligne à la main — puis revenir la chercher dans le rail. Le
+   geste est assez courant pour mériter un bouton là où le manque se
+   constate : au-dessus de la liste.
+
+   On demande l'intitulé avant de créer, plutôt que de poser une ligne
+   « Nouvelle formation » qu'on oubliera de renommer. Une table de catalogue
+   se salit vite, et une ligne sans nom ne se retrouve pas. */
+function rendreAjoutRail() {
+  var zone = OF.$('ajout-rail');
+  if (zone.dataset.monte) return;
+  zone.dataset.monte = '1';
+
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil ajout';
+  b.id = 'ajouter-formation';
+  b.innerHTML = '<span aria-hidden="true">+</span> Nouvelle formation';
+  b.title = 'Créer une formation absente du catalogue';
+  zone.appendChild(b);
+
+  var boite = document.createElement('div');
+  boite.className = 'ajout-saisie';
+  boite.hidden = true;
+  zone.appendChild(boite);
+
+  var ch = document.createElement('input');
+  ch.type = 'text';
+  ch.className = 'champ';
+  ch.id = 'nouvelle-formation';
+  ch.placeholder = 'Intitulé de la formation';
+  ch.setAttribute('aria-label', 'Intitulé de la nouvelle formation');
+  boite.appendChild(ch);
+
+  var actions = document.createElement('div');
+  actions.className = 'ajout-actions';
+  boite.appendChild(actions);
+
+  var ok = document.createElement('button');
+  ok.type = 'button';
+  ok.className = 'outil';
+  ok.textContent = 'Créer';
+  actions.appendChild(ok);
+
+  var non = document.createElement('button');
+  non.type = 'button';
+  non.className = 'outil discret';
+  non.textContent = 'Annuler';
+  actions.appendChild(non);
+
+  var fermer = function () {
+    boite.hidden = true; b.hidden = false; ch.value = ''; ch.classList.remove('erreur');
+  };
+  b.addEventListener('click', function () {
+    b.hidden = true; boite.hidden = false; ch.focus();
+  });
+  non.addEventListener('click', fermer);
+  ch.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') { fermer(); b.focus(); }
+    if (ev.key === 'Enter') { ev.preventDefault(); creer(); }
+  });
+  ok.addEventListener('click', creer);
+
+  function creer() {
+    var nom = ch.value.trim();
+    if (!nom) {
+      ch.classList.add('erreur');
+      OF.signaler('Donnez un intitulé : une formation sans nom ne se retrouve pas', true);
+      ch.focus();
+      return;
+    }
+    /* Un doublon exact est presque toujours une erreur de frappe répétée :
+       on le signale et on ouvre l'existante plutôt que d'en créer une
+       seconde que personne ne distinguera. */
+    var meme = OF.table('Formations').filter(function (f) {
+      return OF.texte(f.intitule).trim().toLowerCase() === nom.toLowerCase();
+    })[0];
+    if (meme) {
+      fermer();
+      OF.signaler('Cette formation existe déjà : elle est ouverte');
+      ouvrir(meme.id);
+      return;
+    }
+    ok.disabled = true;
+    OF.appliquer([['AddRecord', 'Formations', null, { intitule: nom }]], TABLES, function () {
+      ok.disabled = false;
+      fermer();
+      /* la retrouver par son intitulé : AddRecord ne rend pas l'identifiant
+         à travers la file d'attente du widget */
+      var neuve = OF.table('Formations').filter(function (f) {
+        return OF.texte(f.intitule).trim() === nom;
+      }).sort(function (x, y) { return y.id - x.id; })[0];
+      if (neuve) {
+        filtre = ''; 
+        var r = OF.$('recherche'); if (r) r.value = '';
+        panier = 'toutes';
+        ouvrir(neuve.id);
+        OF.signaler('Formation créée : complétez sa définition');
+        /* l'identifiant d'un éditeur est « f-<table>-<colonne> » */
+        var i = OF.$('f-Formations-intitule');
+        if (i && i.focus) i.focus();
+      }
+    }).catch(function (e) { ok.disabled = false; OF.signaler(e.message, true); });
+  }
+}
+
 function rendreRail() {
+  rendreAjoutRail();
   rendreFiltreRail();
   var liste = listeFiltree(), rail = OF.$('rail');
   if (!liste.length) {

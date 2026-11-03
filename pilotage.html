@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=44">
+<link rel="stylesheet" href="commun.css?v=45">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,9 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=44"></script>
-<script src="graphes.js?v=44"></script>
-<script src="smartof_sync.js?v=44"></script>
+<script src="commun.js?v=45"></script>
+<script src="graphes.js?v=45"></script>
+<script src="smartof_sync.js?v=45"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -48,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v44';
+var VERSION = 'v45';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -2224,7 +2224,7 @@ function detailFormations(zone, a) {
   });
   t.appendChild(corps);
   zone.appendChild(defilant(t));
-  blocRapprochement(zone, aRapprocher, T);
+  blocRapprochement(zone, aRapprocher, T, a.annee);
 }
 
 /* LE RAPPROCHEMENT A UNE SEULE VUE, ET ELLE N'EST PAS ICI
@@ -2244,64 +2244,7 @@ function parametreTexte(cle) {
   return p ? OF.texte(p.texte).trim() : '';
 }
 
-/* Enregistrer l'adresse de la page de rapprochement, depuis l'endroit où on
-   s'aperçoit qu'elle manque. Demander d'aller créer une ligne dans
-   Parametres à la main, c'est faire faire à l'utilisateur le travail du
-   widget.
-
-   Note : `ecrireParametre` existe déjà pour les réglages numériques, qui
-   vivent dans la colonne `valeur`. Une adresse est du texte et va dans
-   `texte` — deux colonnes, deux fonctions, plutôt qu'une qui devine. */
-function saisiePageSmartOF() {
-  var d = document.createElement('div');
-  d.className = 'barre-synchro';
-
-  var ch = document.createElement('input');
-  ch.type = 'url';
-  ch.className = 'champ';
-  ch.style.flex = '1 1 320px';
-  ch.style.textAlign = 'left';
-  ch.placeholder = 'https://grist.numerique.gouv.fr/o/docs/…/p/58';
-  ch.setAttribute('aria-label', 'Adresse de la page du widget SmartOF');
-  d.appendChild(ch);
-
-  var b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'outil';
-  b.textContent = 'Enregistrer l\'adresse';
-  d.appendChild(b);
-
-  b.addEventListener('click', function () {
-    var v = ch.value.trim();
-    if (!/^https?:\/\//i.test(v)) {
-      ch.classList.add('erreur');
-      OF.signaler('Collez l\'adresse complète de la page, en https', true);
-      return;
-    }
-    ch.classList.remove('erreur');
-    b.disabled = true;
-    ecrireParametreTexte(CLE_PAGE_SMARTOF, v)
-      .then(function () { rendre(); })
-      .catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
-  });
-  return d;
-}
-
-function ecrireParametreTexte(cle, valeur) {
-  if (!OF.colonne('Parametres', 'texte').type) {
-    return Promise.reject(new Error('La table Parametres n\'a pas de colonne « texte » : '
-      + 'le widget SmartOF propose de la créer.'));
-  }
-  var l = OF.table('Parametres').filter(function (x) {
-    return OF.texte(x.cle) === cle;
-  })[0];
-  var action = l
-    ? ['UpdateRecord', 'Parametres', l.id, { texte: valeur }]
-    : ['AddRecord', 'Parametres', null, { cle: cle, texte: valeur }];
-  return OF.appliquer([action], ['Parametres'], function () {});
-}
-
-function blocRapprochement(zone, sessions, T) {
+function blocRapprochement(zone, sessions, T, annee) {
   if (!sessions || !sessions.length) return;
 
   var produits = {};
@@ -2319,29 +2262,31 @@ function blocRapprochement(zone, sessions, T) {
 
   var p = document.createElement('p');
   p.className = 'alerte-bloc';
-  p.innerHTML = '<b>' + OF.plur(n, 'produit SmartOF') + '</b> '
+  /* « produit SmartOF » ne prend pas son s à la fin du sigle : on donne le
+     pluriel plutôt que de laisser la règle par défaut écrire « SmartOFs ». */
+  p.innerHTML = '<b>' + OF.plur(n, 'produit SmartOF', 'produits SmartOF') + '</b> '
     + OF.accord(n, 'n\'est', 'ne sont') + ' pas rapproché' + (n > 1 ? 's' : '')
-    + ' du catalogue cette année, pour ' + OF.eur(montant) + ' de vendu. Ce montant compte '
-    + 'dans les totaux, mais ne se rattache à aucune formation : il manque donc dans le '
-    + 'tableau ci-dessus.';
+    + ' d\'une formation du catalogue, pour <b>' + OF.eur(montant) + '</b> de vendu en '
+    + annee + '. Ce montant est bien compté dans les totaux de l\'année ; il manque '
+    + 'seulement dans le tableau ci-dessus, qui range par formation.';
   d.appendChild(p);
 
+  /* CE QU'IL FAUT FAIRE, EN UNE PHRASE QU'ON PEUT SUIVRE
+     La version précédente demandait de coller l'adresse d'une page Grist
+     pour obtenir un lien. C'était me demander à moi-même un confort, et le
+     facturer à l'utilisateur : il devait aller chercher une URL avant de
+     pouvoir faire son travail. La page s'appelle SmartOF et elle est dans
+     le menu de gauche — le dire suffit. */
   var ou = document.createElement('p');
   ou.className = 'note';
   var page = parametreTexte(CLE_PAGE_SMARTOF);
-  if (page) {
-    ou.innerHTML = 'Le rapprochement se fait en une seule fois, pour toutes les années, dans '
-      + 'le widget SmartOF — section « La liaison avec le catalogue », avec les numéros de '
-      + 'session et les liens pour aller vérifier : <a href="' + OF.echappe(page)
-      + '" target="_blank" rel="noopener noreferrer">ouvrir cette page</a>.';
-    d.appendChild(ou);
-  } else {
-    ou.innerHTML = 'Le rapprochement se fait en une seule fois, pour toutes les années, dans '
-      + 'le widget <b>SmartOF</b> — section « La liaison avec le catalogue ». Collez ici '
-      + 'l\'adresse de la page Grist qui le porte, et le lien sera direct la prochaine fois.';
-    d.appendChild(ou);
-    d.appendChild(saisiePageSmartOF());
-  }
+  ou.innerHTML = 'Pour les rapprocher : ouvrez la page <b>SmartOF</b> '
+    + (page ? '(<a href="' + OF.echappe(page) + '" target="_blank" rel="noopener noreferrer">'
+        + 'ouvrir dans un onglet</a>)' : '(menu de gauche)')
+    + ', section <b>« La liaison avec le catalogue »</b>. Chaque produit y est listé une '
+    + 'seule fois, pour toutes les années, avec ses numéros de session cliquables vers '
+    + 'SmartOF : on tape le nom de la formation, on confirme, c\'est fait pour toujours.';
+  d.appendChild(ou);
   zone.appendChild(d);
 }
 

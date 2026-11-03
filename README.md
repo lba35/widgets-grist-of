@@ -725,6 +725,19 @@ onglets, et on ne savait jamais s'il en restait ailleurs. Elle vit désormais **
 le widget SmartOF**, où elle couvre toutes les années. L'onglet d'année dit seulement ce qu'il
 perd à ne pas l'avoir fait, et y mène.
 
+### Créer une formation absente, sans quitter l'écran
+
+Deux endroits, parce que le manque se constate à deux endroits :
+
+- **Dans le rail de la fiche**, un bouton `+ Nouvelle formation`. Il demande l'intitulé *avant*
+  de créer la ligne, plutôt que de poser une « Nouvelle formation » qu'on oubliera de renommer —
+  une table de catalogue se salit vite, et une ligne sans nom ne se retrouve pas. Un intitulé
+  déjà pris n'est pas dupliqué : la fiche existante s'ouvre.
+- **Dans le rapprochement SmartOF**, une entrée `+ créer la formation « … »` sous le nom du
+  produit : elle crée la fiche et la rapproche dans la foulée. C'est là qu'on découvre qu'un
+  produit vendu n'a jamais eu de fiche au catalogue ; obliger à ouvrir un autre widget puis
+  revenir, c'était trois écrans pour une évidence.
+
 ### Un champ filtrant, et une confirmation
 
 Chercher « Hôpital privé des Côtes d'Armor » dans une liste déroulante de deux cents lignes se
@@ -737,12 +750,22 @@ pas à la frappe** : il se confirme, et la confirmation nomme les deux côtés e
 Deux détails qui ont demandé d'être corrigés après coup, et qui auraient gêné un utilisateur
 réel autant qu'ils ont gêné le test :
 
-- La barre de confirmation était **dans le tableau**, qui défile horizontalement : sur une
-  fenêtre étroite le bouton passait derrière le bord droit. Un bouton qu'on ne peut pas
-  atteindre est un bouton qui n'existe pas. Elle est désormais sous le tableau, fixe.
 - Cliquer « Confirmer » fait d'abord **perdre le focus** au champ, donc `change`, donc la barre
   se reconstruisait — le bouton disparaissait sous le curseur et le clic se perdait. Une
   proposition identique ne se reconstruit plus.
+- J'avais d'abord cru que le défilement horizontal du tableau rendait le bouton inatteignable,
+  et déplacé la confirmation dans une barre sous le tableau. C'était traiter un symptôme : une
+  fois la vraie cause corrigée, la confirmation est revenue **dans la ligne**, sous le champ.
+  On confirme là où on a choisi.
+
+### Dire où aller, pas réclamer une URL
+
+Quand un produit n'est pas rapproché, l'onglet d'année affichait un champ demandant de coller
+l'adresse de la page Grist du widget SmartOF, pour obtenir un lien. C'était facturer à
+l'utilisateur un confort qui m'arrangeait : il devait aller chercher une URL avant de pouvoir
+travailler. La page s'appelle **SmartOF** et elle est dans le menu de gauche — le dire suffit,
+et la phrase décrit maintenant le geste complet : taper le nom, confirmer, c'est fait pour
+toutes les années.
 
 ## Ne pas faire saisir ce que le document sait déjà
 

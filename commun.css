@@ -523,10 +523,21 @@ a.code-session:focus-visible { outline: none; box-shadow: var(--ombre-focus); }
 /* Le champ filtrant du rapprochement, et sa confirmation. */
 .filtrant { min-width: 240px; }
 .filtrant .champ { width: 100%; text-align: left; }
-.confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .filtrant .confirmation { margin-top: 6px; }
-.confirmation.barre { margin-top: 12px; padding: 10px 12px; background: var(--surface);
-  border: 1px solid var(--trait-fort); font-size: 13px; }
-.confirmation.barre.vide { display: none; }
+.filtrant .confirmation:empty { margin-top: 0; }
+/* la confirmation naît sous le champ : la cellule doit pouvoir s'élargir
+   un peu, sinon les deux boutons passent à la ligne un par un */
+.filtrant .confirmation .second { flex: 1 1 100%; }
+.filtrant { min-width: 260px; }
 .outil.discret { background: none; border-color: transparent; color: var(--sourd); }
 .outil.discret:hover { border-color: var(--trait); }
+
+/* Le bouton de création d'une formation, au-dessus du rail. */
+.ajout-rail { padding: 0 0 8px; }
+.ajout-rail .outil.ajout { width: 100%; justify-content: center; }
+.ajout-rail .outil.ajout span { font-size: 15px; line-height: 1; margin-right: 2px; }
+.ajout-saisie { display: grid; gap: 6px; }
+.ajout-saisie .champ { width: 100%; text-align: left; }
+.ajout-actions { display: flex; gap: 6px; }
+.ajout-actions .outil { flex: 1 1 auto; justify-content: center; }

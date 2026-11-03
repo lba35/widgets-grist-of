@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=44">
+<link rel="stylesheet" href="commun.css?v=45">
 </head>
 <body>
 <div id="app" aria-busy="true">
@@ -25,8 +25,8 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=44"></script>
-<script src="smartof_sync.js?v=44"></script>
+<script src="commun.js?v=45"></script>
+<script src="smartof_sync.js?v=45"></script>
 <script>
 'use strict';
 /* L'écran du widget SmartOF. Tout ce qui parle à l'API et au document vit
@@ -54,7 +54,7 @@ var parcourir = SY.parcourir, curseurDe = SY.curseurDe;
 var parametresDeFenetre = SY.parametresDeFenetre, NOMS_REELS = SY.NOMS_REELS;
 var dernierRapport = null;
 
-var VERSION = 'v44';
+var VERSION = 'v45';
 
 
 /* ------------------------------------------------------------- rendu --- */
@@ -419,8 +419,6 @@ function sectionCorrespondance() {
   tab.innerHTML = '<thead><tr><th class="gauche">Produit SmartOF</th>'
     + '<th class="gauche">Code Gesform</th><th class="gauche">Sessions concernées</th>'
     + '<th class="gauche">Formation du catalogue</th></tr></thead>';
-  var zoneConfF = document.createElement('div');
-  zoneConfF.className = 'confirmation barre vide';
   var corps = document.createElement('tbody');
   var parProduit = sessionsParProduit();
   orphelins.forEach(function (p) {
@@ -438,13 +436,12 @@ function sectionCorrespondance() {
     tr.appendChild(celluleSessions(parProduit[OF.texte(p.produit_uid)]));
     var f = document.createElement('td');
     f.className = 'gauche';
-    f.appendChild(choixFormation(p, zoneConfF));
+    f.appendChild(choixFormation(p));
     tr.appendChild(f);
     corps.appendChild(tr);
   });
   tab.appendChild(corps);
   zone.appendChild(defilantLocal(tab));
-  zone.appendChild(zoneConfF);
 
   var note = document.createElement('p');
   note.className = 'aide';
@@ -499,18 +496,17 @@ function champFiltrant(conf) {
   ch.autocomplete = 'off';
   boite.appendChild(ch);
 
-  /* LA CONFIRMATION NE VIT PAS DANS LA CELLULE
-     Posée dans le tableau, elle se retrouvait derrière le bord droit dès que
-     la fenêtre était étroite : le tableau défile horizontalement, et le
-     bouton partait avec. Un bouton qu'on ne peut pas atteindre est un bouton
-     qui n'existe pas. Elle s'affiche donc dans une barre fixe sous le
-     tableau, une seule à la fois — ce qui rend aussi évident qu'on ne
-     confirme qu'un rapprochement à la fois. */
-  var conf2 = conf.zoneConfirmation || document.createElement('div');
-  if (!conf.zoneConfirmation) {
-    conf2.className = 'confirmation';
-    boite.appendChild(conf2);
-  }
+  /* LA CONFIRMATION RESTE DANS LA LIGNE
+     Je l'avais d'abord déplacée dans une barre sous le tableau, croyant que
+     le défilement horizontal la rendait inatteignable. La vraie cause était
+     ailleurs — la barre se reconstruisait quand le champ perdait le focus,
+     et le bouton disparaissait sous le curseur (voir plus bas). Une fois
+     cela corrigé, la place juste de la confirmation est sous le champ, dans
+     la ligne qu'elle concerne : on confirme là où on a choisi, pas à l'autre
+     bout de l'écran. */
+  var conf2 = document.createElement('div');
+  conf2.className = 'confirmation';
+  boite.appendChild(conf2);
 
   /* NE PAS RECONSTRUIRE UNE PROPOSITION IDENTIQUE
      Cliquer « Confirmer » fait d'abord perdre le focus au champ, ce qui
@@ -680,9 +676,6 @@ function sectionRapprochementOrgs() {
 
   boutonPropositionsOrgs(zone, orphelines, T);
 
-  var zoneConf = document.createElement('div');
-  zoneConf.className = 'confirmation barre vide';
-
   var tab = document.createElement('table');
   tab.className = 'matrice rappro-orgs';
   tab.innerHTML = '<thead><tr><th class="gauche">Entreprise SmartOF</th>'
@@ -734,13 +727,12 @@ function sectionRapprochementOrgs() {
 
     var ch = document.createElement('td');
     ch.className = 'gauche';
-    ch.appendChild(choixOrganisation(e, T, zoneConf));
+    ch.appendChild(choixOrganisation(e, T));
     tr.appendChild(ch);
     corps.appendChild(tr);
   });
   tab.appendChild(corps);
   zone.appendChild(defilantLocal(tab));
-  zone.appendChild(zoneConf);
 
   if (orphelines.length > MAX) {
     var p = document.createElement('p');
@@ -807,7 +799,7 @@ function nettoyerLignesVides(zone, T) {
 
 /* Le choix : une organisation existante, ou une ligne neuve portant le nom
    connu de SmartOF. */
-function choixOrganisation(e, T, zoneConf) {
+function choixOrganisation(e, T) {
   var options = [];
   if (e.libelle) {
     options.push({ id: 'neuf', nom: '+ créer « ' + e.libelle + ' »',
@@ -832,7 +824,6 @@ function choixOrganisation(e, T, zoneConf) {
 
   return champFiltrant({
     options: options,
-    zoneConfirmation: zoneConf,
     placeholder: 'Taper le nom de l\'organisation…',
     question: function (nom) {
       return 'Rattacher « ' + (e.libelle || e.uid.slice(0, 8) + '…') + ' » (SmartOF) à « '
@@ -1301,27 +1292,44 @@ function lienVersSession(s) {
   return a;
 }
 
-function choixFormation(p, zoneConf) {
+function choixFormation(p) {
   var formations = OF.formationsTriees();
   /* au-delà d'une vingtaine, une liste déroulante devient un mur : on passe
      au champ filtrant, qui se confirme */
   if (formations.length > 20) {
+    var options = formations.map(function (f) {
+      return { id: f.id,
+        nom: (OF.texte(f.code) ? OF.texte(f.code) + ' — ' : '')
+          + (OF.texte(f.intitule) || 'formation ' + f.id) };
+    });
+    /* LA FORMATION PEUT NE PAS EXISTER ENCORE
+       C'est ici qu'on s'en aperçoit : un produit vendu dans SmartOF dont le
+       catalogue n'a jamais eu la fiche. Obliger à ouvrir un autre widget
+       pour créer la ligne, puis revenir, c'est trois écrans pour une
+       évidence. On la crée sous le nom du produit, et on la rapproche dans
+       la foulée — la fiche se complète ensuite. */
+    var nomProduit = OF.texte(p.nom).trim();
+    if (nomProduit) {
+      options.unshift({ id: 'neuve', groupe: 'Absente du catalogue',
+        nom: '+ créer la formation « ' + nomProduit + ' »' });
+    }
     return champFiltrant({
-      zoneConfirmation: zoneConf,
-      options: formations.map(function (f) {
-        return { id: f.id,
-          nom: (OF.texte(f.code) ? OF.texte(f.code) + ' — ' : '')
-            + (OF.texte(f.intitule) || 'formation ' + f.id) };
-      }),
+      options: options,
       placeholder: 'Taper le code ou l\'intitulé…',
       question: function (nom) {
-        return 'Rapprocher « ' + (OF.texte(p.nom) || 'ce produit') + ' » (SmartOF) avec « '
-          + nom + ' » ?';
+        return nom.indexOf('+ créer') === 0
+          ? 'Créer « ' + nomProduit + ' » dans le catalogue et l\'y rapprocher ?'
+          : 'Rapprocher « ' + (nomProduit || 'ce produit') + ' » (SmartOF) avec « '
+            + nom + ' » ?';
       },
       surChoix: function (id) {
-        OF.appliquer([['UpdateRecord', vraiNom('SmartOF_produits'), p.id,
-          { formation: +id }]], relire(), function () { rendre(); })
-          .catch(function (err) { OF.signaler(err.message, true); });
+        if (id !== 'neuve') {
+          OF.appliquer([['UpdateRecord', vraiNom('SmartOF_produits'), p.id,
+            { formation: +id }]], relire(), function () { rendre(); })
+            .catch(function (err) { OF.signaler(err.message, true); });
+          return;
+        }
+        creerEtRapprocher(p, nomProduit, null);
       }
     });
   }
@@ -1329,7 +1337,14 @@ function choixFormation(p, zoneConf) {
   s.className = 'champ saisie';
   s.style.width = '100%';
   s.style.textAlign = 'left';
+  var nomCourt = OF.texte(p.nom).trim();
   var options = ['<option value="0">— à rapprocher —</option>'];
+  /* La création reste offerte même sur un petit catalogue : la possibilité
+     de créer ne doit pas dépendre du nombre de lignes déjà présentes. */
+  if (nomCourt) {
+    options.push('<option value="neuve">+ créer la formation « '
+      + OF.echappe(nomCourt) + ' »</option>');
+  }
   OF.formationsTriees().forEach(function (f) {
     options.push('<option value="' + f.id + '">'
       + OF.echappe((OF.texte(f.code) ? OF.texte(f.code) + ' · ' : '') + OF.texte(f.intitule))
@@ -1338,10 +1353,37 @@ function choixFormation(p, zoneConf) {
   s.innerHTML = options.join('');
   s.value = String(p.formation || 0);
   s.addEventListener('change', function () {
+    if (s.value === 'neuve') { creerEtRapprocher(p, nomCourt, s); return; }
     OF.appliquer([['UpdateRecord', vraiNom('SmartOF_produits'), p.id, { formation: +s.value || 0 }]],
       [vraiNom('SmartOF_produits')], function () { rendre(); });
   });
   return s;
+}
+
+/* Créer la formation sous le nom du produit, puis l'y rapprocher. Deux
+   écritures : l'identifiant de la nouvelle ligne n'est connu qu'une fois la
+   première appliquée. */
+function creerEtRapprocher(p, nomProduit, el) {
+  if (el) el.disabled = true;
+  var rendreLibre = function () { if (el) el.disabled = false; };
+  return OF.appliquer([['AddRecord', 'Formations', null, { intitule: nomProduit }]],
+    TABLES, function () {
+      var neuve = OF.table('Formations').filter(function (f) {
+        return OF.texte(f.intitule).trim() === nomProduit;
+      }).sort(function (x, y) { return y.id - x.id; })[0];
+      if (!neuve) {
+        rendreLibre();
+        OF.signaler('Formation créée, mais introuvable pour le rapprochement : '
+          + 'rechargez la page', true);
+        rendre();
+        return;
+      }
+      OF.appliquer([['UpdateRecord', vraiNom('SmartOF_produits'), p.id,
+        { formation: neuve.id }]], relire(), function () {
+          OF.signaler('Formation créée et rapprochée — sa fiche reste à compléter');
+          rendre();
+        }).catch(function (err) { rendreLibre(); OF.signaler(err.message, true); });
+    }).catch(function (err) { rendreLibre(); OF.signaler(err.message, true); });
 }
 
 /* ====================================================== correspondance === */
