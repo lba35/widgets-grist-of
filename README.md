@@ -565,8 +565,22 @@ Deux portées, et le choix n'est pas cosmétique :
 
 | Portée | Ce qu'elle fait | Quand |
 |---|---|---|
-| **Depuis la dernière reprise** | filtre sur `filter[updatedAt][gte]`, **la veille comprise** | le geste courant |
+| **Depuis la dernière reprise** | filtre de date, **la veille comprise** | le geste courant |
 | **Tout reprendre** | aucun filtre de date | au moindre doute |
+
+### Quel champ de date l'API accepte-t-elle ?
+
+`filter[updatedAt][gte]` a été refusé par SmartOF : *« Champ de filtre non autorisé »*. L'API
+tient une liste blanche, non documentée. Deux réponses, et la seconde compte plus que la
+première :
+
+1. **La découverte.** Au premier besoin, le moteur essaie les noms plausibles — `updatedAt`,
+   `updated_at`, `modifiedAt`, `createdAt`… — sur une requête d'une seule ligne, et retient
+   dans `Parametres` celui qui passe (`smartof_champ_date`). La recherche n'a lieu qu'une fois.
+2. **Le filet.** Une optimisation ne doit jamais faire échouer la fonction. Si aucun champ
+   n'est filtrable, ou si le champ retenu cesse de l'être, la reprise **repart sans filtre**
+   et le dit dans son bilan. Plus long, mais rien n'est oublié — ce qui est exactement le
+   compromis demandé.
 
 La veille est comprise à dessein : une session modifiée pendant la reprise précédente serait
 sinon manquée pour toujours. Et s'il n'y a pas encore de reprise enregistrée, l'incrémental
@@ -577,6 +591,27 @@ reformater « 02/11/2026 à 23:45 » à l'envers aurait été une source de pann
 Le bilan reste affiché après le redessin : lignes lues, ajoutées, corrigées, inchangées, et les
 avertissements en entier — un produit non rapproché doit se dire là, sinon on ira chercher les
 montants manquants ailleurs.
+
+## Qui porte quoi : le regroupement par gestionnaire
+
+Le domaine dit *ce qu'on vend*, le gestionnaire dit *qui le porte*. Ce sont deux découpages
+complets et indépendants de la même recette : on peut donc empiler l'un et l'autre sans rien
+inventer, et les deux piles ont le même total.
+
+- **Dans l'onglet d'une année** : un tableau — formations, sessions, places, projeté, vendu,
+  pourcentage du projeté, facturé, reste — avec une ligne *Ensemble* qui prouve que rien n'a
+  été perdu, et un graphique en barres pour l'ordre de grandeur.
+- **Dans la synthèse** : les recettes projetées par gestionnaire, année par année, à côté du
+  même découpage par domaine ; puis le tableau du réalisé pour l'année détaillée.
+
+Le gestionnaire lu est **celui de la formation, pas de la session** : une formation appartient à
+une entité, et tout ce qu'elle porte lui revient. Rien n'est réparti au prorata.
+
+La colonne `Formations.gestionnaire` peut être une référence vers une table ou un simple texte
+selon la façon dont le document a été monté : le widget lit son **type** plutôt que de parier,
+et déduit le nom de la table de référence du type lui-même (`Ref:Gestionnaire`). C'est la leçon
+tirée de `SmartOF_sessions` — ne jamais deviner une casse. Sans colonne `gestionnaire`, la
+section n'apparaît pas ; avec un seul gestionnaire, elle le dit au lieu de disparaître.
 
 ## Pas de graphique vide, et pas d'année vide par défaut
 

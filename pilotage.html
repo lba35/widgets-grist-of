@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="commun.css?v=38">
+<link rel="stylesheet" href="commun.css?v=39">
 <style>
   /* propre au pilotage : la grille de saisie des objectifs */
   .objectifs th.gauche { padding-left: 0; }
@@ -27,9 +27,9 @@
 </div>
 <div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
 
-<script src="commun.js?v=38"></script>
-<script src="graphes.js?v=38"></script>
-<script src="smartof_sync.js?v=38"></script>
+<script src="commun.js?v=39"></script>
+<script src="graphes.js?v=39"></script>
+<script src="smartof_sync.js?v=39"></script>
 <script>
 /* =========================================================================
    Pilotage — les deux tableaux de bord.
@@ -48,7 +48,7 @@
 'use strict';
 
 /* Affiché dans le bandeau : une page sortie du cache montre l'ancien numéro. */
-var VERSION = 'v38';
+var VERSION = 'v39';
 
 var TABLES = ['Annees', 'Formations', 'Projections', 'Ventes_inter', 'Ventes_intra',
   'SmartOF_sessions',
@@ -147,6 +147,297 @@ function tuile(libelle, valeur, contexte, classe) {
     + '<div class="tuile-ctx">' + (contexte || '') + '</div>';
   return d;
 }
+/* LE GESTIONNAIRE D'UNE FORMATION
+   La colonne `Formations.gestionnaire` peut être une référence vers une table
+   (CESU 35, DFC…) ou un simple texte selon la façon dont le document a été
+   monté. On lit son type plutôt que de parier : le nom de la table de
+   référence est dans le type lui-même (`Ref:Gestionnaire`), ce qui évite de
+   deviner une casse — la leçon de `SmartOF_sessions`. */
+function tableDeRef(table, colonne) {
+  var c = OF.colonne(table, colonne);
+  var t = (c && c.type) ? String(c.type) : '';
+  var m = /^Ref(?:List)?:(.+)$/.exec(t);
+  return m ? m[1] : null;
+}
+function gestionnairesDisponibles() {
+  return colonneExiste('Formations', 'gestionnaire');
+}
+/* La clé de regroupement et son libellé, quelle que soit la forme. */
+function gestionnaireDe(f) {
+  if (!f) return { cle: '', nom: 'Sans gestionnaire' };
+  var v = f.gestionnaire;
+  if (v === null || v === undefined || v === '' || v === 0) {
+    return { cle: '', nom: 'Sans gestionnaire' };
+  }
+  var t = tableDeRef('Formations', 'gestionnaire');
+  if (t) return { cle: String(v), nom: nom(t, v, 'Gestionnaire ' + v) };
+  return { cle: OF.texte(v), nom: OF.texte(v) };
+}
+
+/* Ce que porte chaque gestionnaire sur une année : le projeté vient des
+   projections, le vendu des sessions. Les deux se rattachent à la formation,
+   et la formation au gestionnaire — on ne proratise rien. */
+function parGestionnaire(a) {
+  var parFormation = OF.parId(OF.table('Formations'));
+  var par = {};
+  var entree = function (f) {
+    var g = gestionnaireDe(f);
+    var c = par[g.cle];
+    if (!c) {
+      c = par[g.cle] = { cle: g.cle, nom: g.nom, formations: {}, sessions: 0, places: 0,
+        projete: 0, cout: 0, vendu: 0, facture: 0, sessionsVendues: 0, placesVendues: 0 };
+    }
+    return c;
+  };
+
+  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (p) {
+    if (p.annee !== a.id || !p.formation) return;
+    var c = entree(parFormation[p.formation]);
+    c.formations[p.formation] = true;
+    /* la colonne s'appelle nb_sessions dans les projections comme dans les
+       ventes intra ; Ventes_intra n'a pas de places, elles se déduisent */
+    c.sessions += p.nb_sessions || p.sessions || 0;
+    c.places += p.places
+      || ((p.nb_sessions || 0) * (p.participants_par_session || 0)) || 0;
+    c.projete += p.recette || 0;
+    c.cout += p.cout || 0;
+  });
+
+  if (realiseDisponible()) {
+    var tri = triSessions(function (sess, T) { return champDe(sess, T, 'annee') === a.id; });
+    var T = tri.table;
+    tri.retenues.forEach(function (sess) {
+      var idF = champDe(sess, T, 'formation');
+      var c = entree(idF ? parFormation[idF] : null);
+      if (idF) c.formations[idF] = true;
+      c.sessionsVendues++;
+      c.placesVendues += nombre(champDe(sess, T, 'places_vendues'));
+      c.vendu += nombre(champDe(sess, T, 'vendu'));
+      c.facture += nombre(champDe(sess, T, 'facture_ht'));
+    });
+  }
+
+  return Object.keys(par).map(function (k) {
+    var c = par[k];
+    c.nbFormations = Object.keys(c.formations).length;
+    c.reste = c.vendu - c.facture;
+    return c;
+  }).sort(function (x, y) {
+    return (y.vendu || y.projete) - (x.vendu || x.projete);
+  });
+}
+
+/* LES GESTIONNAIRES DANS LA SYNTHÈSE : LA TRAJECTOIRE DE CHACUN
+   Le domaine dit ce qu'on vend, le gestionnaire dit qui le porte. Ce sont
+   deux découpages complets et indépendants de la même recette — on peut donc
+   empiler l'un et l'autre sans rien inventer, et le total des deux piles est
+   le même. */
+function grapheGestionnaires(zone, annees) {
+  if (!gestionnairesDisponibles()) return;
+
+  var parFormation = OF.parId(OF.table('Formations'));
+  var parG = {}, noms = {};
+  OF.table('Projections').concat(OF.table('Ventes_intra')).forEach(function (p) {
+    if (!p.annee || !p.formation) return;
+    var g = gestionnaireDe(parFormation[p.formation]);
+    noms[g.cle] = g.nom;
+    (parG[g.cle] = parG[g.cle] || {})[p.annee] =
+      (parG[g.cle][p.annee] || 0) + (p.recette || 0);
+  });
+
+  var totalDe = function (k) {
+    return annees.reduce(function (n, a) { return n + (parG[k][a.id] || 0); }, 0);
+  };
+  var cles = Object.keys(parG).filter(totalDe);
+  if (!cles.length) {
+    rienADessiner(zone, 'Recettes par gestionnaire, année par année',
+      'Aucune recette projetée à répartir. Le gestionnaire se renseigne dans la '
+      + '<b>fiche formation</b>, au même endroit que le domaine.');
+    return;
+  }
+  if (cles.length < 2) {
+    /* Une seule pile n'apprend rien de plus que le total — mais se taire
+       laisserait croire que le regroupement ne marche pas. */
+    var un = document.createElement('p');
+    un.className = 'note';
+    un.innerHTML = 'Toutes les recettes projetées sont portées par <b>'
+      + OF.echappe(noms[cles[0]] || 'un seul gestionnaire')
+      + '</b> : il n\'y a rien à répartir. Le graphique par gestionnaire '
+      + 'apparaîtra dès qu\'une seconde entité portera des formations.';
+    zone.appendChild(un);
+    if (pilotee0()) sectionGestionnaires(zone, pilotee0());
+    return;
+  }
+  function pilotee0() { return OF.parId(OF.table('Annees'))[idAnnee]; }
+  cles.sort(function (x, y) { return totalDe(y) - totalDe(x); });
+
+  var series = cles.map(function (k) { return noms[k] || 'Sans gestionnaire'; });
+  var colonnes = cles.map(function (k) {
+    return function (a) { return parG[k][a.id] || 0; };
+  });
+
+  var pilotee = OF.parId(OF.table('Annees'))[idAnnee];
+  var groupes = annees.map(function (a) {
+    var parts = colonnes.map(function (f) { return f(a); });
+    var total = parts.reduce(function (n, v) { return n + v; }, 0);
+    return {
+      libelle: String(a.annee), parts: parts,
+      bulle: '<b>' + a.annee + '</b> — ' + OF.eur(total)
+        + series.map(function (x, i) {
+          return parts[i] ? '<span class="second">' + OF.echappe(x) + ' : ' + OF.eur(parts[i])
+            + ' · ' + Math.round(100 * parts[i] / total) + ' %</span>' : '';
+        }).join('')
+    };
+  });
+
+  G.figure(zone, {
+    titre: 'Recettes par gestionnaire, année par année',
+    sous: 'Le même total que par domaine, découpé selon qui porte la formation.',
+    haut: 230,
+    series: series.map(function (x, i) {
+      return { nom: x, valeur: pilotee
+        ? OF.eur(colonnes[i](pilotee)) + ' en ' + pilotee.annee : '' };
+    }),
+    chiffres: G.chiffres('Les chiffres',
+      ['Gestionnaire'].concat(annees.map(function (a) { return String(a.annee); })),
+      series.map(function (x, i) {
+        return [x].concat(annees.map(function (a) {
+          return colonnes[i](a) ? OF.eur(colonnes[i](a)) : '—';
+        }));
+      }).concat([['Total'].concat(annees.map(function (a) {
+        var t = colonnes.reduce(function (n, f) { return n + f(a); }, 0);
+        return t ? OF.eur(t) : '—';
+      }))])),
+    dessin: function (larg, haut) {
+      return G.empilees({
+        larg: larg, haut: haut, groupes: groupes, series: series,
+        total: true, formatVal: OF.eur, unite: 'en €',
+        description: 'Recettes projetées par gestionnaire et par année.'
+      });
+    }
+  });
+
+  /* Et le réalisé de l'année pilotée, puisque c'est là qu'on le regarde. */
+  if (pilotee) sectionGestionnaires(zone, pilotee);
+}
+
+/* LE TABLEAU PAR GESTIONNAIRE, POUR UNE ANNÉE
+   Qui porte quoi : c'est la question d'un responsable d'organisme qui a
+   plusieurs entités sous la main. Le projeté et le vendu côte à côte, parce
+   que la comparaison entre gestionnaires n'a de sens qu'à cette condition —
+   un gestionnaire peut vendre beaucoup en ayant peu projeté, et l'inverse. */
+function sectionGestionnaires(zone, a) {
+  if (!gestionnairesDisponibles()) return;
+  var lignes = parGestionnaire(a);
+  if (!lignes.length) return;
+  /* Un seul gestionnaire : le regroupement ne dit rien que le total ne dise
+     déjà. On ne dresse pas un tableau pour une ligne. */
+  if (lignes.length < 2 && !lignes[0].cle) return;
+
+  var avecRealise = realiseDisponible();
+  zone.appendChild(titre('Par gestionnaire'));
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">Gestionnaire</th>'
+    + '<th class="calcule">Formations</th><th>Sessions</th><th>Places</th>'
+    + '<th>Projeté</th>'
+    + (avecRealise ? '<th>Vendu</th><th>% du projeté</th><th>Facturé</th><th>Reste à facturer</th>' : '')
+    + '</tr></thead>';
+  var corps = document.createElement('tbody');
+  var tot = { nbFormations: 0, sessions: 0, places: 0, projete: 0, vendu: 0, facture: 0, reste: 0 };
+
+  lignes.forEach(function (c) {
+    ['nbFormations', 'sessions', 'places', 'projete', 'vendu', 'facture', 'reste']
+      .forEach(function (k) { tot[k] += c[k] || 0; });
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = c.nom;
+    if (!c.cle) {
+      var s2 = document.createElement('div');
+      s2.className = 'second';
+      s2.textContent = 'formations sans gestionnaire renseigné';
+      td.appendChild(s2);
+    }
+    tr.appendChild(td);
+    var cellules = [[OF.ent(c.nbFormations), true], [OF.ent(c.sessions), false],
+      [OF.ent(c.places), false], [c.projete ? OF.eur(c.projete) : '—', false]];
+    if (avecRealise) {
+      cellules.push([OF.eur(c.vendu), false]);
+      cellules.push([c.projete ? Math.round(100 * c.vendu / c.projete) + ' %' : '—', false]);
+      cellules.push([OF.eur(c.facture), false]);
+      cellules.push([OF.eur(c.reste), false]);
+    }
+    cellules.forEach(function (x) {
+      var tdc = document.createElement('td');
+      tdc.className = 'calcul' + (x[1] ? ' calcule' : '');
+      tdc.textContent = x[0];
+      tr.appendChild(tdc);
+    });
+    corps.appendChild(tr);
+  });
+
+  /* Le total : il dit que rien n'a été perdu en chemin. */
+  var trT = document.createElement('tr');
+  trT.className = 'total';
+  var tdT = document.createElement('td');
+  tdT.className = 'gauche libelle';
+  tdT.textContent = 'Ensemble';
+  trT.appendChild(tdT);
+  var cellesT = [OF.ent(tot.nbFormations), OF.ent(tot.sessions), OF.ent(tot.places),
+    tot.projete ? OF.eur(tot.projete) : '—'];
+  if (avecRealise) {
+    cellesT.push(OF.eur(tot.vendu));
+    cellesT.push(tot.projete ? Math.round(100 * tot.vendu / tot.projete) + ' %' : '—');
+    cellesT.push(OF.eur(tot.facture));
+    cellesT.push(OF.eur(tot.reste));
+  }
+  cellesT.forEach(function (x) {
+    var tdc = document.createElement('td');
+    tdc.className = 'calcul';
+    tdc.textContent = x;
+    trT.appendChild(tdc);
+  });
+  corps.appendChild(trT);
+  t.appendChild(corps);
+  zone.appendChild(defilant(t));
+
+  /* Le dessin ne redit pas le tableau : il donne l'ordre de grandeur d'un
+     coup d'œil, ce qu'une colonne de chiffres ne fait pas. */
+  var mesure = avecRealise ? 'vendu' : 'projete';
+  var valeurs = lignes.filter(function (c) { return c[mesure]; });
+  if (valeurs.length >= 2) {
+    G.figure(zone, {
+      titre: (avecRealise ? 'Vendu' : 'Projeté') + ' par gestionnaire en ' + a.annee,
+      sous: avecRealise
+        ? 'Ce que chaque gestionnaire a effectivement vendu cette année-là.'
+        : 'Ce que chaque gestionnaire porte dans la projection.',
+      dessin: function (larg) {
+        return G.barresHorizontales({
+          larg: larg,
+          valeurs: valeurs.map(function (c) {
+            return { libelle: c.nom, valeur: c[mesure],
+              bulle: '<b>' + OF.echappe(c.nom) + '</b><span class="second">'
+                + OF.eur(c[mesure]) + ' · ' + OF.plur(c.nbFormations, 'formation')
+                + '</span>' };
+          }),
+          formatVal: OF.eur,
+          description: (avecRealise ? 'Vendu' : 'Projeté') + ' par gestionnaire pour '
+            + a.annee + '.'
+        });
+      }
+    });
+  }
+
+  var n = document.createElement('p');
+  n.className = 'aide';
+  n.textContent = 'Le gestionnaire est celui de la formation, pas de la session : une '
+    + 'formation appartient à une entité, et tout ce qu\'elle porte lui revient. Rien '
+    + 'n\'est réparti au prorata.';
+  zone.appendChild(n);
+}
+
 /* UN GRAPHIQUE SANS CHIFFRE N'EST PAS UN GRAPHIQUE
    Des axes, une légende, et rien dedans : le lecteur cherche la panne au lieu
    de lire qu'il n'y a pas encore de données. Une phrase qui dit ce qui
@@ -234,6 +525,7 @@ function pageProjection() {
   zone.appendChild(section('De quoi elle est faite',
     'Quels domaines portent la recette, et quelles formations couvrent leurs coûts.'));
   grapheDomaines(zone, annees);
+  grapheGestionnaires(zone, annees);
   rentabilite(zone);
 
   zone.appendChild(section('Ce qui s\'est vraiment vendu',
@@ -1205,9 +1497,13 @@ function pageAnnee(a) {
     zone.appendChild(section('Qui porte, qui décroche',
       'Le vendu face au projeté, formation par formation.'));
     detailFormations(zone, a);
+    sectionGestionnaires(zone, a);
     barreRafraichir(zone);
   } else {
     realiseAbsent(zone);
+    zone.appendChild(section('Qui porte quoi',
+      'La projection de ' + a.annee + ', répartie entre les gestionnaires.'));
+    sectionGestionnaires(zone, a);
   }
 
   zone.appendChild(section('Les objectifs de ' + a.annee,
@@ -2949,11 +3245,19 @@ function chargerSessionsSmartOF() {
   return OF.charger([t]).catch(function () { return null; });
 }
 
+/* La table des gestionnaires n'est pas dans TABLES : son nom dépend du
+   document, on le déduit du type de la colonne. */
+function chargerGestionnaires() {
+  var t = tableDeRef('Formations', 'gestionnaire');
+  if (!t || TABLES.indexOf(t) >= 0 || OF.table(t).length) return Promise.resolve();
+  return OF.charger([t]).catch(function () { return null; });
+}
+
 function demarrer() {
   var annees = OF.anneesTriees();
   if (!annees.length) { OF.echouer('Aucune année dans la table Annees.'); return; }
   /* les sessions d'abord : le choix de l'année de départ en dépend */
-  chargerSessionsSmartOF().then(function () {
+  Promise.all([chargerSessionsSmartOF(), chargerGestionnaires()]).then(function () {
     var d = anneeDeDepart();
     idAnnee = d ? d.id : annees[0].id;
     rendre();

@@ -266,15 +266,59 @@ function repriseIncrementalePossible() {
   return /^\d{4}-\d{2}-\d{2}/.test(reglage(CLE_DERNIER_ISO).trim());
 }
 
-function parametresDeFenetre(fenetre) {
+/* QUEL CHAMP DE DATE L'API ACCEPTE-T-ELLE ?
+   `filter[updatedAt][gte]` a été refusé : « Champ de filtre non autorisé ».
+   L'API tient donc une liste blanche, et elle n'est pas documentée ici. Plutôt
+   que de deviner une fois pour toutes, on essaie les noms plausibles sur une
+   requête d'une seule ligne, et on retient celui qui passe dans le document —
+   la découverte n'a lieu qu'une fois.
+
+   `aucun` est une réponse valable : si aucun champ n'est filtrable, la reprise
+   incrémentale n'existe pas chez ce fournisseur, et il vaut mieux l'écrire que
+   réessayer neuf appels à chaque fois. */
+var CLE_CHAMP_DATE = 'smartof_champ_date';
+var CHAMPS_DATE = ['updatedAt', 'updated_at', 'lastModifiedAt', 'modifiedAt',
+  'dateModification', 'date_modification', 'createdAt', 'created_at'];
+
+function champDateRetenu() { return reglage(CLE_CHAMP_DATE).trim(); }
+
+function trouverChampDate(borne, dire) {
+  var connu = champDateRetenu();
+  if (connu === 'aucun') return Promise.resolve(null);
+  if (connu) return Promise.resolve(connu);
+
+  var i = 0;
+  function suivant() {
+    if (i >= CHAMPS_DATE.length) {
+      return ecrireReglage(CLE_CHAMP_DATE, 'aucun').then(function () { return null; });
+    }
+    var c = CHAMPS_DATE[i++];
+    var essai = { limit: 1 };
+    essai['filter[' + c + '][gte]'] = borne;
+    dire('Recherche du champ de date accepté par l\'API : ' + c + '…');
+    return appeler('/v2/session_formations', essai).then(function () {
+      return ecrireReglage(CLE_CHAMP_DATE, c).then(function () { return c; });
+    }).catch(function () { return suivant(); });
+  }
+  return suivant();
+}
+
+/* La syntaxe est `filter[champ][op]=valeur`. Un paramètre inconnu est ignoré
+   en silence par l'API : écrire `updatedAt[gte]` au lieu de
+   `filter[updatedAt][gte]` ne filtrerait rien et rapatrierait tout sans le
+   dire. Un champ non autorisé, lui, fait une erreur 400 franche — ce qui est
+   préférable, et ce qui a permis de s'en apercevoir. */
+function parametresDeFenetre(fenetre, champDate) {
   var d = depuis(fenetre);
-  /* La syntaxe est `filter[champ][op]=valeur`. Un paramètre inconnu est
-     ignoré en silence par l'API : écrire `updatedAt[gte]` au lieu de
-     `filter[updatedAt][gte]` ne filtrerait rien et rapatrierait tout sans
-     le dire. D'où cette forme, et pas une autre. */
   var p = { limit: 200 };
-  if (d) p['filter[updatedAt][gte]'] = d;
+  if (d && champDate) p['filter[' + champDate + '][gte]'] = d;
   return p;
+}
+
+/* Un filtre refusé ne doit jamais emporter la reprise : l'incrémental est une
+   optimisation, pas la fonction. On repart sans filtre et on le dit. */
+function filtreRefuse(e) {
+  return /filtre|filter/i.test(e && e.message ? e.message : '');
 }
 
 
@@ -760,27 +804,44 @@ function rafraichir(options) {
 
   var sessions = [], commanditaires = [], factures = [], fiches = {};
 
-  dire('Lecture des produits de formation…');
-  return lireProduits(dire, bilan).then(function (liste) {
+  var params = { limit: 200 };
+  var prepare = bilan.borne
+    ? trouverChampDate(bilan.borne, dire).then(function (champ) {
+        if (champ) {
+          bilan.champDate = champ;
+          params = parametresDeFenetre(fenetre, champ);
+        } else {
+          bilan.borne = null;
+          bilan.avertissements.push('L\'API n\'accepte de filtre de date sur aucun des noms '
+            + 'connus : la reprise a porté sur tout, sans filtre. C\'est plus long, mais rien '
+            + 'n\'est oublié.');
+        }
+      })
+    : Promise.resolve();
+
+  return prepare.then(function () {
+    dire('Lecture des produits de formation…');
+    return lireProduits(dire, bilan);
+  }).then(function (liste) {
     liste.forEach(function (p) {
       if (p.produitFormationUid) fiches[p.produitFormationUid] = p;
     });
     dire('Lecture des sessions…');
-    return parcourir('/v2/session_formations', parametresDeFenetre(fenetre), function (n, p) {
+    return parcourir('/v2/session_formations', params, function (n, p) {
       bilan.pages = p; dire('Sessions : ' + n + ' lues sur ' + p + ' page(s)…');
     });
   }).then(function (liste) {
     sessions = liste;
     bilan.lues += liste.length;
     dire('Lecture des commanditaires…');
-    return parcourir('/v2/commanditaires', parametresDeFenetre(fenetre), function (n) {
+    return parcourir('/v2/commanditaires', params, function (n) {
       dire('Commanditaires : ' + n + ' lus…');
     });
   }).then(function (liste) {
     commanditaires = liste;
     bilan.lues += liste.length;
     dire('Lecture des factures…');
-    return parcourir('/v2/factures', parametresDeFenetre(fenetre), function (n) {
+    return parcourir('/v2/factures', params, function (n) {
       dire('Factures : ' + n + ' lues…');
     }).catch(function (e) {
       /* le facturé est un complément : son absence ne doit pas emporter le vendu */
@@ -865,6 +926,19 @@ function rafraichir(options) {
     }).then(function () { enCours = false; dire(''); return bilan; });
   }).catch(function (e) {
     enCours = false;
+    /* Le filtre a été refusé malgré la découverte — le champ retenu a pu
+       cesser d'être autorisé. On l'oublie et on reprend tout : mieux vaut
+       une reprise longue qu'une reprise qui échoue. */
+    if (filtreRefuse(e) && bilan.borne && !options.__sansFiltre) {
+      dire('Filtre de date refusé — reprise complète…');
+      return ecrireReglage(CLE_CHAMP_DATE, '').then(function () {
+        return rafraichir({ fenetre: 'tout', dire: dire, __sansFiltre: true });
+      }).then(function (b) {
+        b.avertissements.unshift('Le filtre de date a été refusé par l\'API (' + e.message
+          + ') : tout a été repris, sans filtre.');
+        return b;
+      });
+    }
     dire('');
     bilan.quand = quandMaintenant();
     bilan.avertissements.push('Interrompu : ' + e.message);
@@ -885,6 +959,8 @@ racine.SmartOFSync = {
   CLE_BASE: CLE_BASE, CLE_JETON: CLE_JETON, CLE_DERNIER: CLE_DERNIER,
   CLE_DERNIER_ISO: CLE_DERNIER_ISO,
   repriseIncrementalePossible: repriseIncrementalePossible,
+  CLE_CHAMP_DATE: CLE_CHAMP_DATE, champDateRetenu: champDateRetenu,
+  CHAMPS_DATE: CHAMPS_DATE,
   reglage: reglage, ecrireReglage: ecrireReglage, colonneTexteParametres: colonneTexteParametres,
   base: base, jeton: jeton, configure: configure,
   /* API */
