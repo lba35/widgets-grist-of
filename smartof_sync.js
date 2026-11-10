@@ -17,7 +17,7 @@ var TABLES = ['Parametres', 'Formations', 'Annees',
   'SmartOF_factures', 'Organisations_clientes'];
 function relire() {
   return ['SmartOF_produits', 'SmartOF_sessions', 'SmartOF_commanditaires',
-    'SmartOF_factures', 'Organisations_clientes']
+    'SmartOF_factures', 'SmartOF_suivis', 'Organisations_clientes']
     .map(vraiNom).concat(['Parametres']);
 }
 
@@ -433,6 +433,28 @@ var SCHEMAS = {
     ['facturation', 'Choice', 'Facturation'],
     ['categorie_tarifaire', 'Ref:Categories_tarifaires', 'Catégorie tarifaire'],
   ],
+  /* LE SUIVI D'UN APPRENANT DANS UNE SESSION
+     Une ligne par inscription : qui, chez quel commanditaire, dans quelle
+     session, et ce que SmartOF en sait — statut réglementaire BPF, temps de
+     présence, abandon éventuel.
+
+     Le vocabulaire des statuts BPF n'est pas documenté dans l'API publique.
+     On le stocke tel quel plutôt que de l'interpréter à l'écriture : c'est à
+     l'écran de montrer les valeurs rencontrées et de laisser dire lesquelles
+     comptent comme une absence. Une règle qu'on peut vérifier vaut mieux
+     qu'une règle qu'on a devinée. */
+  SmartOF_suivis: [
+    ['uid', 'Text', 'Identifiant SmartOF du suivi'],
+    ['apprenant_uid', 'Text', 'Apprenant'],
+    ['commanditaire_uid', 'Text', 'Commanditaire'],
+    ['session_uid', 'Text', 'Session'],
+    ['type', 'Text', 'Type'],
+    ['bpf_statut', 'Text', 'Statut BPF'],
+    ['temps_present', 'Numeric', 'Temps de présence'],
+    ['temps_prevu', 'Numeric', 'Temps prévu en fin d\'exercice'],
+    ['abandon_statut', 'Text', 'Abandon'],
+    ['abandon_date', 'Text', 'Date d\'abandon'],
+  ],
   SmartOF_commanditaires: [
     ['uid', 'Text', 'Identifiant SmartOF'],
     ['session_uid', 'Text', 'Session'],
@@ -483,7 +505,7 @@ function tablesVoisines() {
 
    Les colonnes manquantes restent signalées et créables ; seules celles-ci
    empêchent de tourner. */
-var TABLES_FACULTATIVES = { Organisations_clientes: true };
+var TABLES_FACULTATIVES = { Organisations_clientes: true, SmartOF_suivis: true };
 /* Certaines colonnes enrichissent une table indispensable sans l'être :
    le nom de l'entreprise sur un commanditaire sert à l'affichage, le
    facturé se ventile très bien sans lui. */
@@ -955,6 +977,35 @@ function rapprocherOrganisations(commanditaires, bilan) {
   return actions;
 }
 
+/* Un chemin pointé, lu sans supposer que les niveaux existent. */
+function creux(o, chemin) {
+  var p = chemin.split('.');
+  var v = o;
+  for (var i = 0; i < p.length; i++) {
+    if (v === null || v === undefined || typeof v !== 'object') return undefined;
+    v = v[p[i]];
+  }
+  return v;
+}
+function nombreOuNul(v) {
+  return typeof v === 'number' && isFinite(v) ? v : null;
+}
+
+function suiviVersGrist(s) {
+  return {
+    uid: s.suiviApprenantUid || s.uid || '',
+    apprenant_uid: OF.texte(s.apprenantUid),
+    commanditaire_uid: OF.texte(s.commanditaireUid),
+    session_uid: OF.texte(s.sessionUid),
+    type: OF.texte(s.type),
+    bpf_statut: OF.texte(creux(s, 'metaBPF.status')),
+    temps_present: nombreOuNul(creux(s, 'metaBPF.tempsPresent')),
+    temps_prevu: nombreOuNul(creux(s, 'metaBPF.tempsPresentExerciceFin')),
+    abandon_statut: OF.texte(creux(s, 'abandonInfo.status')),
+    abandon_date: OF.texte(creux(s, 'abandonInfo.dateAbandon')),
+  };
+}
+
 function commanditaireVersGrist(c) {
   return {
     uid: c.commanditaireUid || '',
@@ -1104,7 +1155,7 @@ function rafraichir(options) {
       + 'repris, sans filtre de date. Les prochaines reprises pourront partir de celle-ci.');
   }
 
-  var sessions = [], commanditaires = [], factures = [], fiches = {};
+  var sessions = [], commanditaires = [], factures = [], suivis = [], fiches = {};
 
   var params = { limit: 200 };
   var prepare = bilan.borne
@@ -1153,6 +1204,20 @@ function rafraichir(options) {
   }).then(function (liste) {
     factures = liste;
     bilan.lues += liste.length;
+    dire('Lecture des suivis apprenants…');
+    /* L'assiduité est un complément : si la collection n'existe pas sur
+       cette instance, ou si le droit manque, la reprise des ventes ne doit
+       pas tomber avec elle. */
+    return parcourir('/v2/suivi_apprenants', params, function (n) {
+      dire('Suivis apprenants : ' + n + ' lus…');
+    }).catch(function (e) {
+      bilan.avertissements.push('Suivis apprenants non repris : ' + e.message
+        + '. L\'assiduité restera vide ; le reste de la reprise est complet.');
+      return [];
+    });
+  }).then(function (liste) {
+    suivis = liste;
+    bilan.lues += liste.length;
     dire('Écriture dans le document…');
 
     /* les produits rencontrés, et leur rapprochement au catalogue */
@@ -1192,6 +1257,8 @@ function rafraichir(options) {
          n'ajoute que le reste, et on ne touche jamais à `facturation` —
          c'est une décision humaine, et une synchro ne défait pas une
          décision humaine. */
+      .concat(fusionner(vraiNom('SmartOF_suivis'),
+        suivis.map(suiviVersGrist), 'uid', bilan))
       .concat(rapprocherOrganisations(commanditaires, bilan))
       .concat(factures.length
         ? fusionner(vraiNom('SmartOF_factures'), factures.map(factureVersGrist), 'uid', bilan)

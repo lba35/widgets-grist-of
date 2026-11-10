@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assiduité — présences et absences</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="commun.css?v=46">
+<style>
+  /* propre à l'assiduité : le classement du vocabulaire BPF */
+  .vocabulaire { display: grid; gap: 1px; background: var(--trait);
+    border: 1px solid var(--trait); margin-top: 12px; }
+  .vocabulaire .mot { display: flex; align-items: center; gap: 12px;
+    padding: 9px 12px; background: var(--surface); font-size: 13.5px; }
+  .vocabulaire .mot .nom { flex: 1 1 auto; font-weight: 500; }
+  .vocabulaire .mot .cpt { color: var(--sourd); font-variant-numeric: tabular-nums; }
+  .vocabulaire .mot label { display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; color: var(--sourd); cursor: pointer; }
+  .vocabulaire .mot input { accent-color: var(--alerte); }
+</style>
+</head>
+<body>
+<div id="app" aria-busy="true">
+  <div class="barre">
+    <div class="onglets" id="onglets" role="tablist"></div>
+    <div class="avance" id="avance"></div>
+  </div>
+  <div class="corps">
+    <div class="page" id="page"><p class="vide">Chargement du document…</p></div>
+  </div>
+</div>
+<div class="etat-sauve" id="sauve" role="status" aria-live="polite"></div>
+
+<script src="commun.js?v=46"></script>
+<script src="graphes.js?v=46"></script>
+<script>
+/* =========================================================================
+   Assiduité — qui vient, qui ne vient pas.
+
+   Une question différente de celle du pilotage : non pas « combien a-t-on
+   vendu » mais « combien de places vendues ont été occupées ». Elle a ses
+   propres regroupements — par formation, par commanditaire, par mois — et
+   mérite son écran plutôt qu'une section de plus dans un tableau de bord
+   déjà long.
+
+   DEUX MESURES, ET ELLES NE DISENT PAS LA MÊME CHOSE
+
+   1. Le TAUX DE PRÉSENCE HORAIRE : la somme des temps de présence rapportée
+      au temps prévu. Il ne demande aucun réglage, se calcule dès que SmartOF
+      remonte ces deux durées, et compte une demi-journée manquée comme une
+      demi-journée. C'est la mesure qui ne se discute pas.
+
+   2. Le TAUX D'ABSENCE : la part des inscrits dont le statut BPF désigne une
+      absence. Celui-là demande de savoir quels statuts comptent comme une
+      absence — et le vocabulaire n'est documenté nulle part. On affiche donc
+      les statuts rencontrés et on laisse les classer. Tant que rien n'est
+      classé, cette mesure n'est pas affichée : un taux d'absence de 0 % par
+      défaut serait un mensonge confortable.
+
+   Rien n'est recalculé depuis la grille tarifaire ou les formules du
+   document : on groupe des valeurs que SmartOF a remontées et que le
+   document stocke.
+   ========================================================================= */
+'use strict';
+
+var VERSION = 'v46';
+var TABLES = ['Formations', 'Annees', 'Parametres', 'SmartOF_suivis',
+  'SmartOF_sessions', 'SmartOF_commanditaires', 'Organisations_clientes'];
+
+/* La clé qui porte le classement du vocabulaire BPF. */
+var CLE_ABSENTS = 'bpf_statuts_absents';
+
+var vue = 'toutes';          /* 'toutes', ou l'identifiant d'une année */
+
+/* ------------------------------------------------- résolution tolérante --- */
+/* Les mêmes précautions que dans le pilotage : un document monté à la main
+   nomme ses colonnes comme il veut, et une table peut différer par la casse. */
+function sansAccent(t) {
+  return String(t === null || t === undefined ? '' : t)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function tableProche(attendu) {
+  var connues = Object.keys(OF.doc.colonnes || {});
+  if (connues.indexOf(attendu) >= 0) return attendu;
+  var bas = attendu.toLowerCase();
+  return connues.filter(function (t) { return t.toLowerCase() === bas; })[0] || null;
+}
+function colonneExiste(table, col) {
+  var meta = (OF.doc.colonnes || {})[table];
+  if (!meta) return false;
+  if (Object.keys(meta).length) return !!meta[col];
+  var l = OF.table(table)[0];
+  return !!(l && col in l);
+}
+var COLS_NOM_ORG = ['organisation', 'nom', 'intitule', 'libelle', 'raison_sociale'];
+function colonneLibelleOrg(T) {
+  if (!T) return null;
+  var meta = (OF.doc.colonnes || {})[T] || {};
+  for (var i = 0; i < COLS_NOM_ORG.length; i++) {
+    if (meta[COLS_NOM_ORG[i]]) return COLS_NOM_ORG[i];
+  }
+  var l = OF.table(T)[0];
+  if (l) {
+    for (var k = 0; k < COLS_NOM_ORG.length; k++) {
+      if (COLS_NOM_ORG[k] in l) return COLS_NOM_ORG[k];
+    }
+  }
+  return null;
+}
+
+function nombre(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+function aUnNombre(v) { return typeof v === 'number' && isFinite(v); }
+
+/* ------------------------------------------------------- le vocabulaire --- */
+/* Les statuts tenus pour une absence, tels que l'utilisateur les a classés.
+   Stockés dans Parametres, donc partagés par tous ceux qui ouvrent le
+   document : la règle est celle de l'organisme, pas celle d'un navigateur. */
+function statutsAbsents() {
+  var p = OF.table('Parametres').filter(function (x) {
+    return OF.texte(x.cle) === CLE_ABSENTS;
+  })[0];
+  var brut = p ? OF.texte(p.texte) : '';
+  var out = {};
+  brut.split('|').forEach(function (m) {
+    var t = m.trim();
+    if (t) out[sansAccent(t)] = true;
+  });
+  return out;
+}
+function regleDefinie() { return Object.keys(statutsAbsents()).length > 0; }
+
+function ecrireStatutsAbsents(liste) {
+  if (!colonneExiste('Parametres', 'texte')) {
+    return Promise.reject(new Error('La table Parametres n\'a pas de colonne « texte » : '
+      + 'le widget SmartOF propose de la créer.'));
+  }
+  var val = liste.join('|');
+  var l = OF.table('Parametres').filter(function (x) {
+    return OF.texte(x.cle) === CLE_ABSENTS;
+  })[0];
+  var action = l
+    ? ['UpdateRecord', 'Parametres', l.id, { texte: val }]
+    : ['AddRecord', 'Parametres', null, { cle: CLE_ABSENTS, texte: val }];
+  return OF.appliquer([action], ['Parametres'], function () {});
+}
+
+/* ------------------------------------------------------------ la lecture --- */
+/* Un suivi d'apprenant enrichi de ce qu'il faut pour le ranger : son année,
+   son mois, sa formation, son organisation. Tout vient du document. */
+var LECTURE = null;
+
+function disponible() {
+  var T = tableProche('SmartOF_suivis');
+  return !!(T && OF.table(T).length);
+}
+
+function lire() {
+  if (LECTURE) return LECTURE;
+  var Tsu = tableProche('SmartOF_suivis');
+  var Tse = tableProche('SmartOF_sessions');
+  var Tc = tableProche('SmartOF_commanditaires');
+  var To = tableProche('Organisations_clientes');
+
+  var parFormation = OF.parId(OF.table('Formations'));
+  var sessions = {};
+  if (Tse) {
+    OF.table(Tse).forEach(function (s) { sessions[OF.texte(s.uid)] = s; });
+  }
+  var entrepriseDe = {}, nomCommanditaire = {};
+  if (Tc) {
+    OF.table(Tc).forEach(function (c) {
+      entrepriseDe[OF.texte(c.uid)] = OF.texte(c.entreprise_uid);
+      nomCommanditaire[OF.texte(c.uid)] = OF.texte(c.entreprise_nom);
+    });
+  }
+  var nomOrg = {};
+  if (To) {
+    var colNom = colonneLibelleOrg(To);
+    OF.table(To).forEach(function (o) {
+      var u = OF.texte(o.entreprise_uid);
+      if (u && colNom) nomOrg[u] = OF.texte(o[colNom]);
+    });
+  }
+
+  var absents = statutsAbsents();
+  var lignes = [], statuts = {}, sansSession = 0;
+
+  OF.table(Tsu).forEach(function (su) {
+    var sess = sessions[OF.texte(su.session_uid)];
+    var statut = OF.texte(su.bpf_statut).trim() || '(sans statut)';
+    var e = statuts[statut] = statuts[statut] || { n: 0, absent: !!absents[sansAccent(statut)] };
+    e.n++;
+
+    if (!sess) { sansSession++; return; }
+    var date = OF.texte(sess.date_debut);
+    var mois = /^(\d{4})-(\d{2})/.exec(date);
+    var f = sess.formation ? parFormation[sess.formation] : null;
+    var ent = entrepriseDe[OF.texte(su.commanditaire_uid)] || '';
+
+    lignes.push({
+      annee: sess.annee || 0,
+      mois: mois ? +mois[2] : 0,
+      formation: sess.formation || 0,
+      nomFormation: f ? (OF.texte(f.intitule) || 'formation ' + f.id)
+        : (OF.texte(sess.produit_nom) || 'Formation non rapprochée'),
+      entreprise: ent,
+      nomEntreprise: nomOrg[ent] || nomCommanditaire[OF.texte(su.commanditaire_uid)]
+        || (ent ? 'Organisation ' + ent.slice(0, 8) + '…' : 'Sans commanditaire'),
+      statut: statut,
+      estAbsent: !!absents[sansAccent(statut)],
+      present: aUnNombre(su.temps_present) ? su.temps_present : null,
+      prevu: aUnNombre(su.temps_prevu) ? su.temps_prevu : null,
+      abandon: !!OF.texte(su.abandon_statut).trim(),
+    });
+  });
+
+  LECTURE = { lignes: lignes, statuts: statuts, sansSession: sansSession,
+    avecDurees: lignes.some(function (l) { return l.prevu; }) };
+  return LECTURE;
+}
+
+function lignesDeLaVue() {
+  var tout = lire().lignes;
+  if (vue === 'toutes') return tout;
+  var id = +vue;
+  return tout.filter(function (l) { return l.annee === id; });
+}
+
+/* Le cumul d'un paquet de suivis : c'est la seule arithmétique de l'écran,
+   et elle n'est qu'une somme. */
+function cumul(lignes) {
+  var c = { inscrits: 0, absents: 0, abandons: 0, present: 0, prevu: 0, avecDuree: 0 };
+  lignes.forEach(function (l) {
+    c.inscrits++;
+    if (l.estAbsent) c.absents++;
+    if (l.abandon) c.abandons++;
+    if (l.prevu) {
+      c.prevu += l.prevu;
+      c.present += nombre(l.present);
+      c.avecDuree++;
+    }
+  });
+  c.tauxAbsence = c.inscrits ? c.absents / c.inscrits : null;
+  c.tauxPresence = c.prevu ? c.present / c.prevu : null;
+  return c;
+}
+
+/* Un pourcentage à la française : la virgule décimale, et une seule
+   décimale — au-delà, on donnerait une précision que l'effectif n'a pas. */
+function pct(x) {
+  if (x === null || x === undefined) return '—';
+  return String(Math.round(x * 1000) / 10).replace('.', ',') + ' %';
+}
+/* Une durée dont l'unité n'est pas documentée par l'API : on ne lui invente
+   pas d'heures. Le rapport « suivi sur prévu » se lit sans unité. */
+function duree(x) { return String(Math.round(x * 10) / 10).replace('.', ','); }
+
+/* ============================================================== l'écran === */
+function rendre() {
+  G.oublier();
+  LECTURE = null;
+  rendreOnglets();
+  var page = OF.$('page');
+  page.innerHTML = '';
+
+  if (!disponible()) { page.appendChild(absent()); G.redessiner(); rendreAvance(); return; }
+
+  page.appendChild(enTete());
+  page.appendChild(tuiles());
+  vocabulaire(page);
+  parMois(page);
+  parGroupe(page, 'formation', 'Par formation',
+    'Où l\'absentéisme se concentre : une formation dont la moitié des inscrits ne vient '
+    + 'pas n\'a pas le même problème qu\'une formation qui fait le plein.');
+  parGroupe(page, 'entreprise', 'Par commanditaire',
+    'Quel établissement inscrit des gens qui ne viennent pas. C\'est la conversation à '
+    + 'avoir avec lui, pas avec le formateur.');
+  notes(page);
+
+  G.redessiner();
+  rendreAvance();
+}
+
+function rendreOnglets() {
+  var zone = OF.$('onglets');
+  var annees = OF.anneesTriees();
+  var vues = [{ cle: 'toutes', nom: 'Toutes les années' }].concat(annees.map(function (a) {
+    return { cle: String(a.id), nom: String(a.annee) };
+  }));
+  var ids = vues.map(function (v) { return v.cle; }).join(',');
+  if (zone.dataset.ids !== ids) {
+    zone.dataset.ids = ids;
+    zone.innerHTML = '';
+    vues.forEach(function (v) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'onglet';
+      b.setAttribute('role', 'tab');
+      b.textContent = v.nom;
+      b.dataset.vue = v.cle;
+      b.addEventListener('click', function () { vue = v.cle; rendre(); });
+      zone.appendChild(b);
+    });
+  }
+  Array.prototype.forEach.call(zone.querySelectorAll('.onglet'), function (b) {
+    var actif = b.dataset.vue === vue;
+    b.setAttribute('aria-selected', actif ? 'true' : 'false');
+    b.classList.toggle('actif', actif);
+  });
+}
+
+function rendreAvance() {
+  var z = OF.$('avance');
+  if (!z) return;
+  var c = cumul(lignesDeLaVue());
+  z.innerHTML = '';
+  var dire = function (t, v) {
+    var s = document.createElement('span');
+    s.className = 'mesure';
+    s.innerHTML = OF.echappe(t) + ' <b>' + OF.echappe(v) + '</b>';
+    z.appendChild(s);
+  };
+  dire('Inscrits', OF.ent(c.inscrits));
+  if (c.tauxPresence !== null) dire('Présence', pct(c.tauxPresence));
+  if (regleDefinie()) dire('Absents', OF.ent(c.absents));
+  var v = document.createElement('span');
+  v.className = 'version';
+  v.textContent = VERSION;
+  z.appendChild(v);
+}
+
+function absent() {
+  var d = document.createElement('div');
+  var h = document.createElement('h1');
+  h.textContent = 'Assiduité';
+  d.appendChild(h);
+  var p = document.createElement('p');
+  p.className = 'alerte-bloc';
+  p.innerHTML = 'La table <code>SmartOF_suivis</code> est vide ou absente : il n\'y a pas '
+    + 'encore de suivi d\'apprenant dans le document.';
+  d.appendChild(p);
+  var q = document.createElement('p');
+  q.className = 'note';
+  q.innerHTML = 'Elle se remplit depuis le widget <b>SmartOF</b> : le bouton « créer les '
+    + 'colonnes » pose la table, puis un <b>rafraîchissement complet</b> va chercher les '
+    + 'suivis chez SmartOF. Si la collection n\'est pas ouverte sur votre instance, le bilan '
+    + 'de la reprise le dira — le reste des ventes est repris quand même.';
+  d.appendChild(q);
+  return d;
+}
+
+function enTete() {
+  var d = document.createElement('div');
+  var h = document.createElement('h1');
+  var a = vue === 'toutes' ? null : OF.parId(OF.table('Annees'))[+vue];
+  h.textContent = a ? 'Assiduité ' + a.annee : 'Assiduité, toutes années';
+  d.appendChild(h);
+  var p = document.createElement('p');
+  p.className = 'sous';
+  p.textContent = 'Ce que deviennent les places vendues : qui vient, qui ne vient pas, '
+    + 'et où cela se concentre.';
+  d.appendChild(p);
+  return d;
+}
+
+function tuiles() {
+  var c = cumul(lignesDeLaVue());
+  var t = document.createElement('div');
+  t.className = 'tuiles';
+  var poser = function (lib, val, ctx, cls) {
+    var d = document.createElement('div');
+    d.className = 'tuile';
+    d.innerHTML = '<div class="tuile-lib">' + OF.echappe(lib) + '</div>'
+      + '<div class="tuile-val' + (cls ? ' ' + cls : '') + '">' + OF.echappe(val) + '</div>'
+      + '<div class="tuile-ctx">' + OF.echappe(ctx) + '</div>';
+    t.appendChild(d);
+  };
+
+  /* Une vue vide ne se commente pas comme une vue pleine : dire « SmartOF
+     ne remonte pas les durées » devant zéro inscrit enverrait chercher une
+     panne là où il n'y a simplement rien. */
+  var rien = !c.inscrits;
+  poser('Inscrits', OF.ent(c.inscrits),
+    rien ? 'aucun suivi sur cette période' : 'suivis d\'apprenants repris');
+
+  if (rien) {
+    poser('Présence', '—', 'rien à mesurer');
+    poser('Absents', '—', 'rien à mesurer');
+    poser('Abandons', '—', 'rien à mesurer');
+    return t;
+  }
+
+  if (c.tauxPresence !== null) {
+    poser('Présence', pct(c.tauxPresence),
+      duree(c.present) + ' suivi sur ' + duree(c.prevu) + ' prévu',
+      c.tauxPresence < 0.9 ? 'negatif' : '');
+  } else {
+    poser('Présence', '—', 'SmartOF ne remonte pas les durées');
+  }
+
+  if (regleDefinie()) {
+    poser('Absents', OF.ent(c.absents), pct(c.tauxAbsence) + ' des inscrits',
+      c.absents ? 'negatif' : '');
+  } else {
+    poser('Absents', '—', 'statuts à classer, plus bas');
+  }
+
+  poser('Abandons', OF.ent(c.abandons),
+    c.abandons ? 'signalés par SmartOF' : 'aucun signalé', c.abandons ? 'negatif' : '');
+  return t;
+}
+
+/* ------------------------------------------------------- le vocabulaire --- */
+/* On ne devine pas ce que « BPF_PRESENT_PARTIEL » veut dire. On montre les
+   valeurs rencontrées, leur poids, et on laisse cocher celles qui sont des
+   absences. Le classement vit dans le document : il vaut pour tout le monde,
+   et il se relit. */
+function vocabulaire(zone) {
+  var L = lire();
+  var mots = Object.keys(L.statuts).sort(function (a, b) {
+    return L.statuts[b].n - L.statuts[a].n;
+  });
+  if (!mots.length) return;
+
+  zone.appendChild(section('Ce qui compte comme une absence',
+    'Le vocabulaire des statuts BPF n\'est documenté nulle part : voici ceux que votre '
+    + 'instance emploie. Cochez ceux qui désignent une absence — le classement est '
+    + 'enregistré dans le document et vaut pour tout le monde.'));
+
+  var ouvert = !regleDefinie();
+  var det = document.createElement('details');
+  det.className = 'chiffres';
+  det.open = ouvert;
+  var som = document.createElement('summary');
+  som.textContent = regleDefinie()
+    ? 'Les ' + mots.length + ' statuts rencontrés, et leur classement'
+    : 'À classer : ' + mots.length + ' statuts rencontrés';
+  det.appendChild(som);
+
+  var boite = document.createElement('div');
+  boite.className = 'vocabulaire';
+  var coches = {};
+  mots.forEach(function (m) {
+    var e = L.statuts[m];
+    coches[m] = e.absent;
+    var l = document.createElement('div');
+    l.className = 'mot';
+
+    var n = document.createElement('span');
+    n.className = 'nom';
+    n.textContent = m;
+    l.appendChild(n);
+
+    var c = document.createElement('span');
+    c.className = 'cpt';
+    c.textContent = OF.plur(e.n, 'inscrit');
+    l.appendChild(c);
+
+    var lab = document.createElement('label');
+    var ch = document.createElement('input');
+    ch.type = 'checkbox';
+    ch.checked = e.absent;
+    ch.addEventListener('change', function () { coches[m] = ch.checked; });
+    lab.appendChild(ch);
+    lab.appendChild(document.createTextNode('compte comme une absence'));
+    l.appendChild(lab);
+    boite.appendChild(l);
+  });
+  det.appendChild(boite);
+
+  var barre = document.createElement('div');
+  barre.className = 'barre-synchro';
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outil';
+  b.textContent = 'Enregistrer le classement';
+  b.addEventListener('click', function () {
+    b.disabled = true;
+    var liste = mots.filter(function (m) { return coches[m]; });
+    ecrireStatutsAbsents(liste).then(function () {
+      OF.signaler(liste.length
+        ? OF.plur(liste.length, 'statut') + ' ' + OF.accord(liste.length, 'classé', 'classés')
+          + ' comme absence'
+        : 'Aucun statut n\'est plus compté comme une absence');
+      rendre();
+    }).catch(function (e) { b.disabled = false; OF.signaler(e.message, true); });
+  });
+  barre.appendChild(b);
+  var aide = document.createElement('span');
+  aide.className = 'second';
+  aide.textContent = 'Le taux de présence horaire, lui, ne dépend pas de ce classement.';
+  barre.appendChild(aide);
+  det.appendChild(barre);
+  zone.appendChild(det);
+}
+
+/* ------------------------------------------------------------- par mois --- */
+var MOIS = ['janv.', 'févr.', 'mars', 'avril', 'mai', 'juin',
+  'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+
+function parMois(zone) {
+  var lignes = lignesDeLaVue().filter(function (l) { return l.mois; });
+  if (!lignes.length) return;
+
+  var par = {};
+  for (var m = 1; m <= 12; m++) par[m] = [];
+  lignes.forEach(function (l) { par[l.mois].push(l); });
+  var cumuls = [];
+  for (var k = 1; k <= 12; k++) cumuls.push({ mois: k, c: cumul(par[k]) });
+
+  zone.appendChild(section('Mois par mois',
+    'Les creux de l\'été ne se lisent pas comme un problème d\'assiduité : c\'est '
+    + 'l\'activité qui s\'arrête. Le nombre d\'inscrits est donc donné à côté du taux.'));
+
+  var mesure = cumuls.some(function (x) { return x.c.tauxPresence !== null; })
+    ? 'presence' : (regleDefinie() ? 'absence' : null);
+
+  if (mesure) {
+    var titre2 = mesure === 'presence'
+      ? 'Taux de présence horaire, par mois' : 'Taux d\'absence, par mois';
+    G.figure(zone, {
+      titre: titre2,
+      sous: mesure === 'presence'
+        ? 'Temps réellement suivi rapporté au temps prévu. Un mois sans inscrit n\'a pas '
+          + 'de taux : le trait s\'interrompt plutôt que de retomber à zéro.'
+        : 'Part des inscrits dont le statut désigne une absence.',
+      haut: 210,
+      chiffres: G.chiffres('Les chiffres',
+        ['Mois', 'Inscrits', mesure === 'presence' ? 'Présence' : 'Absence',
+          'Abandons'],
+        cumuls.map(function (x) {
+          return [MOIS[x.mois - 1], OF.ent(x.c.inscrits),
+            pct(mesure === 'presence' ? x.c.tauxPresence : x.c.tauxAbsence),
+            OF.ent(x.c.abandons)];
+        })),
+      dessin: function (larg, haut) {
+        return G.ligne({
+          larg: larg, haut: haut,
+          valeurs: cumuls.map(function (x) {
+            var v = mesure === 'presence' ? x.c.tauxPresence : x.c.tauxAbsence;
+            return {
+              libelle: MOIS[x.mois - 1],
+              valeur: v === null ? null : Math.round(v * 1000) / 10,
+              bulle: '<b>' + MOIS[x.mois - 1] + '</b><span class="second">'
+                + OF.plur(x.c.inscrits, 'inscrit') + '</span>'
+                + (v === null ? '<span class="second">aucun taux calculable</span>'
+                  : '<span class="second">' + (mesure === 'presence' ? 'présence ' : 'absence ')
+                    + pct(v) + '</span>')
+            };
+          }),
+          formatY: function (n) { return n + ' %'; },
+          unite: 'en %',
+          description: titre2 + '.'
+        });
+      }
+    });
+  }
+
+  /* Le volume, qui donne son poids au taux. */
+  G.figure(zone, {
+    titre: 'Inscrits par mois',
+    sous: 'Un taux calculé sur trois inscrits ne vaut pas un taux calculé sur trois cents.',
+    haut: 180,
+    dessin: function (larg, haut) {
+      return G.barres({
+        larg: larg, haut: haut,
+        valeurs: cumuls.map(function (x) {
+          return { libelle: MOIS[x.mois - 1], valeur: x.c.inscrits,
+            bulle: '<b>' + MOIS[x.mois - 1] + '</b><span class="second">'
+              + OF.plur(x.c.inscrits, 'inscrit') + '</span>' };
+        }),
+        formatVal: OF.ent,
+        description: 'Nombre d\'inscrits par mois.'
+      });
+    }
+  });
+}
+
+/* --------------------------------------------- par formation / par client --- */
+function parGroupe(zone, cle, titreSection, sous) {
+  var lignes = lignesDeLaVue();
+  if (!lignes.length) return;
+
+  var par = {};
+  lignes.forEach(function (l) {
+    var k = String(l[cle] || '') + '|' + (cle === 'formation' ? l.nomFormation : l.nomEntreprise);
+    (par[k] = par[k] || { nom: cle === 'formation' ? l.nomFormation : l.nomEntreprise,
+      lignes: [] }).lignes.push(l);
+  });
+  var groupes = Object.keys(par).map(function (k) {
+    var g = par[k];
+    g.c = cumul(g.lignes);
+    return g;
+  });
+  if (groupes.length < 2) return;
+
+  var mesure = groupes.some(function (g) { return g.c.tauxPresence !== null; })
+    ? 'presence' : (regleDefinie() ? 'absence' : null);
+
+  /* Trier par ce qui fait mal : le plus absent d'abord quand on a un taux,
+     le plus gros effectif sinon. Classer par ordre alphabétique obligerait
+     à lire les vingt lignes pour trouver la seule qui compte. */
+  groupes.sort(function (x, y) {
+    if (mesure === 'presence') {
+      var px = x.c.tauxPresence === null ? 2 : x.c.tauxPresence;
+      var py = y.c.tauxPresence === null ? 2 : y.c.tauxPresence;
+      if (px !== py) return px - py;
+    } else if (mesure === 'absence') {
+      if (y.c.tauxAbsence !== x.c.tauxAbsence) return y.c.tauxAbsence - x.c.tauxAbsence;
+    }
+    return y.c.inscrits - x.c.inscrits;
+  });
+
+  zone.appendChild(section(titreSection, sous));
+
+  var t = document.createElement('table');
+  t.className = 'matrice';
+  t.innerHTML = '<thead><tr><th class="gauche">'
+    + (cle === 'formation' ? 'Formation' : 'Commanditaire') + '</th>'
+    + '<th class="calcule">Inscrits</th>'
+    + (mesure === 'presence' ? '<th>Temps prévu</th><th>Temps suivi</th><th>Présence</th>' : '')
+    + (regleDefinie() ? '<th>Absents</th><th>Taux d\'absence</th>' : '')
+    + '<th>Abandons</th></tr></thead>';
+  var corps = document.createElement('tbody');
+  var MAX = 40;
+  groupes.slice(0, MAX).forEach(function (g) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'gauche libelle';
+    td.textContent = g.nom;
+    tr.appendChild(td);
+
+    var cellules = [[OF.ent(g.c.inscrits), 'calcul calcule']];
+    if (mesure === 'presence') {
+      cellules.push([g.c.prevu ? duree(g.c.prevu) : '—', 'calcul']);
+      cellules.push([g.c.prevu ? duree(g.c.present) : '—', 'calcul']);
+      cellules.push([pct(g.c.tauxPresence),
+        'calcul' + (g.c.tauxPresence !== null && g.c.tauxPresence < 0.9 ? ' negatif' : '')]);
+    }
+    if (regleDefinie()) {
+      cellules.push([OF.ent(g.c.absents), 'calcul']);
+      cellules.push([pct(g.c.tauxAbsence),
+        'calcul' + (g.c.tauxAbsence > 0.1 ? ' negatif' : '')]);
+    }
+    cellules.push([OF.ent(g.c.abandons), 'calcul']);
+    cellules.forEach(function (x) {
+      var c = document.createElement('td');
+      c.className = x[1];
+      c.textContent = x[0];
+      tr.appendChild(c);
+    });
+    corps.appendChild(tr);
+  });
+  t.appendChild(corps);
+  zone.appendChild(defilant(t));
+
+  if (groupes.length > MAX) {
+    var p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = 'Les ' + MAX + ' premières lignes sont affichées, triées par '
+      + (mesure ? 'assiduité la plus faible' : 'effectif') + ' ; '
+      + (groupes.length - MAX) + ' autres suivent.';
+    zone.appendChild(p);
+  }
+
+  /* Le dessin ne redit pas le tableau : il montre d'un coup d'œil qui
+     décroche, sur les dix premiers seulement — au-delà, des barres de deux
+     pixels ne comparent plus rien. */
+  if (mesure) {
+    var dix = groupes.slice(0, 10).filter(function (g) {
+      return (mesure === 'presence' ? g.c.tauxPresence : g.c.tauxAbsence) !== null;
+    });
+    if (dix.length >= 2) {
+      G.figure(zone, {
+        titre: (mesure === 'presence' ? 'Présence la plus faible' : 'Absence la plus forte')
+          + ' — ' + (cle === 'formation' ? 'formations' : 'commanditaires'),
+        sous: 'Les dix premiers du tableau ci-dessus.',
+        dessin: function (larg) {
+          return G.barresHorizontales({
+            larg: larg,
+            valeurs: dix.map(function (g) {
+              var v = mesure === 'presence' ? g.c.tauxPresence : g.c.tauxAbsence;
+              return { libelle: g.nom, valeur: Math.round(v * 1000) / 10,
+                bulle: '<b>' + OF.echappe(g.nom) + '</b><span class="second">'
+                  + OF.plur(g.c.inscrits, 'inscrit') + '</span><span class="second">'
+                  + (mesure === 'presence' ? 'présence ' : 'absence ') + pct(v) + '</span>' };
+            }),
+            formatVal: function (n) { return n + ' %'; },
+            description: (mesure === 'presence' ? 'Taux de présence' : 'Taux d\'absence')
+              + ' des dix ' + (cle === 'formation' ? 'formations' : 'commanditaires')
+              + ' les moins assidus.'
+          });
+        }
+      });
+    }
+  }
+}
+
+/* ------------------------------------------------------------ les restes --- */
+function notes(zone) {
+  var L = lire();
+  if (L.sansSession) {
+    var p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = OF.plur(L.sansSession, 'suivi') + ' ne se rattache à aucune session '
+      + 'reprise : ' + OF.accord(L.sansSession, 'il n\'entre', 'ils n\'entrent')
+      + ' ni dans une année ni dans une formation. Une reprise complète depuis SmartOF '
+      + 'ramène les sessions manquantes.';
+    zone.appendChild(p);
+  }
+  if (!L.avecDurees) {
+    var q = document.createElement('p');
+    q.className = 'note';
+    q.textContent = 'SmartOF ne remonte pas de temps de présence sur ces suivis : le taux '
+      + 'de présence horaire ne peut pas être calculé. Le classement des statuts BPF reste '
+      + 'alors la seule mesure possible.';
+    zone.appendChild(q);
+  }
+  var r = document.createElement('p');
+  r.className = 'aide';
+  r.textContent = 'Un inscrit est un suivi d\'apprenant, pas une place vendue : un '
+    + 'commanditaire peut réserver dix places et n\'inscrire que huit personnes. L\'écart '
+    + 'entre les deux se lit dans le pilotage, pas ici.';
+  zone.appendChild(r);
+}
+
+/* --------------------------------------------------------------- outils --- */
+function section(titre, sous) {
+  var d = document.createElement('div');
+  d.className = 'section-pilotage';
+  var h = document.createElement('h2');
+  h.textContent = titre;
+  d.appendChild(h);
+  if (sous) {
+    var p = document.createElement('p');
+    p.className = 'sous';
+    p.textContent = sous;
+    d.appendChild(p);
+  }
+  return d;
+}
+function defilant(el) {
+  var d = document.createElement('div');
+  d.className = 'defilant';
+  d.appendChild(el);
+  return d;
+}
+
+/* =========================================================== démarrage === */
+function demarrer() {
+  if (!OF.anneesTriees().length) { OF.echouer('Aucune année dans la table Annees.'); return; }
+  rendre();
+}
+
+if (typeof window.TEST_SANS_DEMARRAGE === 'undefined') OF.initialiser(TABLES, demarrer);
+window.__assiduite = {
+  demarrer: function () { OF.initialiser(TABLES, demarrer); },
+  rendre: rendre,
+  lire: function () { return lire(); }
+};
+</script>
+</body>
+</html>

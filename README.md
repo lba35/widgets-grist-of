@@ -11,6 +11,7 @@ dans Grist.
 | `charge.html` | Les moyens à réunir, en trois volets : vivier d'intervenants, recrutement, occupation des salles |
 | `pilotage.html` | La trajectoire commerciale pluriannuelle : recettes, résultat, hypothèses, scénarios, objectifs |
 | `smartof_sync.js` | Le moteur de reprise SmartOF, sans écran — partagé par le widget SmartOF et le pilotage |
+| `assiduite.html` | L'absentéisme : par formation, par commanditaire, par mois et sur l'année |
 | `smartof.html` | La reprise du réalisé depuis l'API SmartOF, à la demande, sans CSV |
 | `commun.css` | Jetons visuels et composants partagés |
 | `commun.js` | Plomberie Grist, métadonnées de colonnes, éditeurs, écriture différée |
@@ -647,6 +648,45 @@ Le **détail par année du pilotage** fait la même chose à l'envers : au lieu 
 « Produit non rapproché » muette, il nomme les produits en attente, leur vendu, leurs numéros de
 session et les liens. Plus un lien vers la page de rapprochement quand son adresse est dans
 `Parametres`, à la clé `page_smartof`.
+
+## L'assiduité : deux mesures, dont une qui ne se discute pas
+
+La question n'est pas celle du pilotage. Celui-ci demande *combien a-t-on vendu* ; celle-ci,
+*combien de places vendues ont été occupées*. Elle a ses propres regroupements — formation,
+commanditaire, mois — et un écran à elle plutôt qu'une section de plus dans un tableau de bord
+déjà long.
+
+La source est la collection `/v2/suivi_apprenants` de SmartOF : une ligne par inscription, avec
+le statut réglementaire BPF, le temps de présence et l'abandon éventuel. Elle est reprise comme
+les factures — **sans bloquer** : si la collection n'est pas ouverte sur l'instance, le bilan le
+dit et les ventes sont reprises quand même.
+
+| Mesure | Ce qu'elle vaut | Ce qu'elle suppose |
+|---|---|---|
+| **Taux de présence horaire** | temps suivi ÷ temps prévu ; compte une demi-journée manquée comme une demi-journée | rien — dès que SmartOF remonte les deux durées |
+| **Taux d'absence** | part des inscrits dont le statut BPF désigne une absence | de savoir quels statuts sont des absences |
+
+Le vocabulaire de `metaBPF.status` n'est documenté nulle part dans l'API publique — ni la liste
+des valeurs, ni l'unité de `tempsPresent`. Deux conséquences assumées :
+
+- **On ne devine pas.** L'écran affiche les statuts que l'instance emploie, avec leur poids en
+  inscrits, et les fait cocher. Le classement vit dans `Parametres`, donc vaut pour tous ceux
+  qui ouvrent le document — c'est la règle de l'organisme, pas celle d'un navigateur. Tant que
+  rien n'est classé, le taux d'absence n'est pas affiché : un 0 % par défaut serait un mensonge
+  confortable.
+- **On n'invente pas d'unité.** Le temps est donné en rapport — « 31,5 suivi sur 56 prévu » —
+  et jamais converti en heures.
+
+Le volume accompagne toujours le taux : un taux calculé sur trois inscrits ne vaut pas un taux
+calculé sur trois cents, et les creux de juillet-août se lisent comme un arrêt d'activité, pas
+comme un problème d'assiduité. Les tableaux sont triés par assiduité la plus faible et non par
+ordre alphabétique — classer par nom obligerait à lire vingt lignes pour trouver la seule qui
+compte.
+
+Enfin, un inscrit est un **suivi d'apprenant**, pas une place vendue : un commanditaire peut
+réserver dix places et n'inscrire que huit personnes. L'écart entre les deux se lit dans le
+pilotage, et l'écran le dit pour qu'on ne cherche pas à rapprocher deux chiffres qui ne
+mesurent pas la même chose.
 
 ## Une facture archivée reste une facture
 
