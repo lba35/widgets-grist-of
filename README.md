@@ -649,44 +649,64 @@ Le **détail par année du pilotage** fait la même chose à l'envers : au lieu 
 session et les liens. Plus un lien vers la page de rapprochement quand son adresse est dans
 `Parametres`, à la clé `page_smartof`.
 
-## L'assiduité : deux mesures, dont une qui ne se discute pas
+## L'assiduité : la présence vient des émargements
 
 La question n'est pas celle du pilotage. Celui-ci demande *combien a-t-on vendu* ; celle-ci,
 *combien de places vendues ont été occupées*. Elle a ses propres regroupements — formation,
-commanditaire, mois — et un écran à elle plutôt qu'une section de plus dans un tableau de bord
-déjà long.
+commanditaire, mois — et un écran à elle.
 
-La source est la collection `/v2/suivi_apprenants` de SmartOF : une ligne par inscription, avec
-le statut réglementaire BPF, le temps de présence et l'abandon éventuel. Elle est reprise comme
-les factures — **sans bloquer** : si la collection n'est pas ouverte sur l'instance, le bilan le
-dit et les ventes sont reprises quand même.
+### Un premier essai bâti sur les mauvais champs
 
-| Mesure | Ce qu'elle vaut | Ce qu'elle suppose |
+J'avais construit la mesure sur `metaBPF.status` et `tempsPresent`, faute de valeurs
+documentées. Sur le document réel :
+
+| Champ | Ce que je croyais | Ce que c'est |
 |---|---|---|
-| **Taux de présence horaire** | temps suivi ÷ temps prévu ; compte une demi-journée manquée comme une demi-journée | rien — dès que SmartOF remonte les deux durées |
-| **Taux d'absence** | part des inscrits dont le statut BPF désigne une absence | de savoir quels statuts sont des absences |
+| `metaBPF.status` | un statut de présence | la **catégorie de financement BPF** (« F.1.a - Salariés ») |
+| `tempsPresent` | le temps réellement suivi | **0 partout** |
+| `abandonInfo.status` | vide si pas d'abandon | **« Actif »** pour une inscription normale |
 
-Le vocabulaire de `metaBPF.status` n'est documenté nulle part dans l'API publique — ni la liste
-des valeurs, ni l'unité de `tempsPresent`. Deux conséquences assumées :
+Le troisième a produit le défaut visible : `!!statut` comptait « Actif » comme un abandon, donc
+huit mille inscrits, huit mille abandons. **C'est la troisième fois que la même erreur se
+présente** — `!!f.archived` sur les factures, `!!s.archive` sur les sessions, et ici. Une chaîne
+non vide n'est pas un oui ; la liste des mots qui valent « abandon » est désormais explicite et
+affichée.
 
-- **On ne devine pas.** L'écran affiche les statuts que l'instance emploie, avec leur poids en
-  inscrits, et les fait cocher. Le classement vit dans `Parametres`, donc vaut pour tous ceux
-  qui ouvrent le document — c'est la règle de l'organisme, pas celle d'un navigateur. Tant que
-  rien n'est classé, le taux d'absence n'est pas affiché : un 0 % par défaut serait un mensonge
-  confortable.
-- **On n'invente pas d'unité.** Le temps est donné en rapport — « 31,5 suivi sur 56 prévu » —
-  et jamais converti en heures.
+### La présence se lit dans les émargements
 
-Le volume accompagne toujours le taux : un taux calculé sur trois inscrits ne vaut pas un taux
-calculé sur trois cents, et les creux de juillet-août se lisent comme un arrêt d'activité, pas
-comme un problème d'assiduité. Les tableaux sont triés par assiduité la plus faible et non par
-ordre alphabétique — classer par nom obligerait à lire vingt lignes pour trouver la seule qui
-compte.
+`/v2/emargements` : un enregistrement par apprenant et par créneau. Trois particularités, toutes
+documentées et toutes piégeuses :
 
-Enfin, un inscrit est un **suivi d'apprenant**, pas une place vendue : un commanditaire peut
-réserver dix places et n'inscrire que huit personnes. L'écart entre les deux se lit dans le
-pilotage, et l'écran le dit pour qu'on ne cherche pas à rapprocher deux chiffres qui ne
-mesurent pas la même chose.
+- **Il n'y a pas de champ statut de premier niveau.** L'état courant est le **dernier log de
+  `history`**, trié par `createdAt`. Lire `history[0]` donnerait un état au hasard.
+- **Trois états : `Présent`, `Absent`, `En attente`.** Le troisième n'est pas une absence, c'est
+  une feuille non signée. Le taux se calcule donc sur les créneaux **tranchés** (présents +
+  absents) ; les créneaux en attente sont comptés à part et dits.
+- **Aucun filtre de date.** Le seul chemin est `filter[sessionUid][eq]`, une requête par
+  session. Sur une reprise incrémentale la fenêtre a déjà réduit la liste des sessions, donc
+  les émargements suivent sans effort ; sur une reprise complète c'est long, et la barre de
+  progression l'annonce session par session. Une session qui échoue n'emporte pas les autres :
+  le nombre de ratées est signalé.
+
+Les émargements ne sont pas stockés ligne à ligne — huit mille suivis feraient vite cinquante
+mille lignes. Le moteur les **compte par inscription** et pose les totaux sur le suivi :
+créneaux, présences, absences, en attente, minutes d'émargement partiel.
+
+### Ce que l'écran montre
+
+- **Présence** : créneaux signés présents ÷ créneaux tranchés.
+- **Absences** : le complément, en créneaux.
+- **Absents complets** : les inscrits qui n'ont signé **aucune** présence — la place payée pour
+  rien, qui n'est pas la même chose qu'une demi-journée manquée.
+- **Abandons** : ceux que SmartOF signale comme tels, et eux seuls.
+
+Les deux colonnes de statut sont affichées pour ce qu'elles contiennent vraiment, avec leur
+poids en inscrits et, pour l'état d'inscription, la lecture qui en est faite. C'est ce qui
+aurait évité l'erreur, et c'est ce qui permet de la vérifier.
+
+Le volume accompagne toujours le taux, les creux de juillet-août se lisent comme un arrêt
+d'activité, et les tableaux sont triés par assiduité la plus faible. Enfin, un inscrit est un
+**suivi d'apprenant**, pas une place vendue : l'écart entre les deux se lit dans le pilotage.
 
 ## Une facture archivée reste une facture
 

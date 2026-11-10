@@ -454,6 +454,16 @@ var SCHEMAS = {
     ['temps_prevu', 'Numeric', 'Temps prévu en fin d\'exercice'],
     ['abandon_statut', 'Text', 'Abandon'],
     ['abandon_date', 'Text', 'Date d\'abandon'],
+    /* LES ÉMARGEMENTS, COMPTÉS PLUTÔT QUE STOCKÉS
+       Un émargement par apprenant et par créneau : sur ce document, huit
+       mille suivis feraient vite cinquante mille lignes. On garde le compte
+       par inscription — c'est tout ce que l'assiduité demande, et la table
+       reste lisible à l'œil comme au chargement. */
+    ['creneaux', 'Int', 'Créneaux émargés'],
+    ['presences', 'Int', 'Présences'],
+    ['absences', 'Int', 'Absences'],
+    ['en_attente', 'Int', 'Émargements en attente'],
+    ['minutes_partielles', 'Int', 'Minutes d\'émargement partiel'],
   ],
   SmartOF_commanditaires: [
     ['uid', 'Text', 'Identifiant SmartOF'],
@@ -991,6 +1001,99 @@ function nombreOuNul(v) {
   return typeof v === 'number' && isFinite(v) ? v : null;
 }
 
+/* LE STATUT D'UN ÉMARGEMENT SE LIT DANS SON DERNIER LOG
+   L'API le dit : « un émargement n'a pas de champ statut de premier niveau ».
+   L'état courant est celui du log le plus récent de `history`, trié par
+   `createdAt` décroissant. Prendre le premier élément du tableau sans
+   regarder la date reviendrait à lire un état au hasard. */
+function dernierLog(e) {
+  var h = (e && e.history) || [];
+  if (!Array.isArray(h) || !h.length) return null;
+  var mieux = null, quand = null;
+  h.forEach(function (l) {
+    var t = Date.parse(OF.texte(l && l.createdAt));
+    if (mieux === null || (!isNaN(t) && (quand === null || isNaN(quand) || t > quand))) {
+      mieux = l; quand = t;
+    }
+  });
+  return mieux;
+}
+
+/* Trois états possibles — Présent, Absent, En attente — et le troisième
+   n'est pas une absence : c'est une feuille non signée. Les confondre
+   gonflerait l'absentéisme de tout ce qui n'a pas encore été émargé. */
+function etatEmargement(e) {
+  var l = dernierLog(e);
+  var st = sansAccentSync(creux(l || {}, 'logInfo.status'));
+  if (st === 'present') return 'present';
+  if (st === 'absent') return 'absent';
+  return 'attente';
+}
+function minutesPartielles(e) {
+  var l = dernierLog(e);
+  var m = creux(l || {}, 'logInfo.emargementPartiel');
+  return typeof m === 'number' && isFinite(m) ? m : 0;
+}
+
+/* LES ÉMARGEMENTS SE LISENT SESSION PAR SESSION
+   L'API n'offre aucun filtre de date dessus : le seul chemin documenté est
+   `filter[sessionUid][eq]`, une requête par session. C'est long sur une
+   reprise complète — mais sur une reprise incrémentale, la fenêtre a déjà
+   réduit la liste des sessions, et les émargements suivent sans effort.
+
+   Une session qui échoue n'emporte pas les autres : on compte les ratées et
+   on le dit. Un taux de présence calculé sur un échantillon muet vaudrait
+   moins que pas de taux du tout. */
+function lireEmargements(sessions, dire, bilan) {
+  var uids = [];
+  (sessions || []).forEach(function (s) {
+    var u = OF.texte(s && s.sessionUid).trim();
+    if (u) uids.push(u);
+  });
+  if (!uids.length) return Promise.resolve([]);
+
+  var tout = [], rates = 0, i = 0;
+  function suivante() {
+    if (i >= uids.length) return Promise.resolve(tout);
+    var u = uids[i++];
+    dire('Émargements : ' + i + ' session(s) sur ' + uids.length + '…');
+    var p = { limit: 1000 };
+    p['filter[sessionUid][eq]'] = u;
+    return parcourir('/v2/emargements', p, function () {})
+      .then(function (liste) { tout = tout.concat(liste); })
+      .catch(function () { rates++; })
+      .then(suivante);
+  }
+  return suivante().then(function () {
+    if (rates) {
+      bilan.avertissements.push(OF.plur(rates, 'session') + ' sur ' + uids.length
+        + ' n\'a pas rendu ses émargements : l\'assiduité de '
+        + OF.accord(rates, 'celle-là est incomplète', 'celles-là est incomplète') + '.');
+    }
+    bilan.emargements = tout.length;
+    return tout;
+  });
+}
+
+/* Les émargements ramenés à un compte par inscription : la clé est le
+   couple session + apprenant, qui est aussi ce qui identifie un suivi. */
+function compterEmargements(emargements) {
+  var par = {};
+  (emargements || []).forEach(function (e) {
+    if (!e) return;
+    var cle = OF.texte(e.sessionUid) + '|' + OF.texte(e.userUid);
+    var c = par[cle] = par[cle]
+      || { creneaux: 0, presences: 0, absences: 0, en_attente: 0, minutes_partielles: 0 };
+    c.creneaux++;
+    var etat = etatEmargement(e);
+    if (etat === 'present') c.presences++;
+    else if (etat === 'absent') c.absences++;
+    else c.en_attente++;
+    c.minutes_partielles += minutesPartielles(e);
+  });
+  return par;
+}
+
 function suiviVersGrist(s) {
   return {
     uid: s.suiviApprenantUid || s.uid || '',
@@ -1004,6 +1107,22 @@ function suiviVersGrist(s) {
     abandon_statut: OF.texte(creux(s, 'abandonInfo.status')),
     abandon_date: OF.texte(creux(s, 'abandonInfo.dateAbandon')),
   };
+}
+
+/* Le suivi, augmenté de ses émargements quand on les a. Sans eux, on ne
+   touche pas aux compteurs : les écraser avec des zéros effacerait la
+   reprise précédente à chaque rafraîchissement incrémental. */
+function suiviAvecEmargements(s, comptes) {
+  var l = suiviVersGrist(s);
+  if (!comptes) return l;
+  var c = comptes[OF.texte(s.sessionUid) + '|' + OF.texte(s.apprenantUid)];
+  if (!c) return l;
+  l.creneaux = c.creneaux;
+  l.presences = c.presences;
+  l.absences = c.absences;
+  l.en_attente = c.en_attente;
+  l.minutes_partielles = Math.round(c.minutes_partielles);
+  return l;
 }
 
 function commanditaireVersGrist(c) {
@@ -1155,7 +1274,8 @@ function rafraichir(options) {
       + 'repris, sans filtre de date. Les prochaines reprises pourront partir de celle-ci.');
   }
 
-  var sessions = [], commanditaires = [], factures = [], suivis = [], fiches = {};
+  var sessions = [], commanditaires = [], factures = [], suivis = [], emargements = [],
+    fiches = {};
 
   var params = { limit: 200 };
   var prepare = bilan.borne
@@ -1218,6 +1338,18 @@ function rafraichir(options) {
   }).then(function (liste) {
     suivis = liste;
     bilan.lues += liste.length;
+    /* Les émargements ne se lisent que si l'on a des suivis à enrichir :
+       sans eux, les compteurs n'auraient nulle part où se poser. */
+    if (!suivis.length) return [];
+    dire('Lecture des émargements…');
+    return lireEmargements(sessions, dire, bilan).catch(function (e) {
+      bilan.avertissements.push('Émargements non repris : ' + e.message
+        + '. Les présences et absences resteront à leur valeur précédente.');
+      return [];
+    });
+  }).then(function (liste) {
+    emargements = liste;
+    bilan.lues += liste.length;
     dire('Écriture dans le document…');
 
     /* les produits rencontrés, et leur rapprochement au catalogue */
@@ -1258,7 +1390,10 @@ function rafraichir(options) {
          c'est une décision humaine, et une synchro ne défait pas une
          décision humaine. */
       .concat(fusionner(vraiNom('SmartOF_suivis'),
-        suivis.map(suiviVersGrist), 'uid', bilan))
+        (function () {
+          var comptes = emargements.length ? compterEmargements(emargements) : null;
+          return suivis.map(function (x) { return suiviAvecEmargements(x, comptes); });
+        }()), 'uid', bilan))
       .concat(rapprocherOrganisations(commanditaires, bilan))
       .concat(factures.length
         ? fusionner(vraiNom('SmartOF_factures'), factures.map(factureVersGrist), 'uid', bilan)
